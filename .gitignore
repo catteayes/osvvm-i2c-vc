@@ -1,0 +1,15 @@
+# Simulator / OSVVM script outputs
+VHDL_LIBS/
+sim/
+reports/
+logs/
+results/
+*.wlf
+*.vcd
+*.ghw
+*.fst
+transcript
+work/
+work-obj*.cf
+*.o
+*.exe
