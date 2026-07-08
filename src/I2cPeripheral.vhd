@@ -86,7 +86,7 @@ begin
     TransactionDispatcher : process
     begin
         wait on ModelID;  -- wait until initialized
-        Log(ModelID, "I2cPeripheral skeleton — no transaction handling implemented yet", ALWAYS);
+        Log(ModelID, "I2cPeripheral skeleton - no transaction handling implemented yet", ALWAYS);
         -- TODO(intern): loop { WaitForTransaction; case TransRec.Operation ... }
         wait;
     end process TransactionDispatcher;
