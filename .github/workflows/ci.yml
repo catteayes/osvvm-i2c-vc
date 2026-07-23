@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (recursive - OsvvmLibraries has nested submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install GHDL
+        uses: ghdl/setup-ghdl-ci@nightly
+        with:
+          backend: mcode
+
+      - name: Install Tcl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tcl
+
+      - name: Create sim directory
+        run: mkdir -p sim
+
+      - name: Build OsvvmLibraries and run the I2C regression
+        working-directory: sim
+        run: tclsh ${{ github.workspace }}/.github/scripts/ci_regression.tcl
+
+      - name: Upload OSVVM reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: osvvm-reports
+          path: sim/
