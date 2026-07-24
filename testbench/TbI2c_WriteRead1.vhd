@@ -65,6 +65,8 @@ begin
         wait until n_Reset = '1';
         WaitForClock(I2cControllerRec, 2);
 
+        Write(I2cControllerRec, "1010000", X"A5");
+
         -- TODO(intern): Write(I2cControllerRec, Addr, Data) then
         -- Read/ReadCheck the same location back.
 
