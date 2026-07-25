@@ -8,10 +8,12 @@
 --
 --  Description:
 --      First test case: single-byte write then read to a 7-bit target
---      address. Skeleton only — stimulus to be implemented.
+--      address. Self-checking via AffirmIfEqual on both the controller and
+--      peripheral side.
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.2        Write and read, self-checking (#9)
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +42,7 @@ begin
     begin
         SetTestName("TbI2c_WriteRead1");
         SetLogEnable(PASSED, TRUE);
+        SetLogEnable(DEBUG, TRUE);
 
         wait for 0 ns;  wait for 0 ns;
         TranscriptOpen;
@@ -61,14 +64,17 @@ begin
     -- Controller-side stimulus
     ------------------------------------------------------------
     ControllerProc : process
+        variable RData : std_logic_vector(7 downto 0);
     begin
         wait until n_Reset = '1';
         WaitForClock(I2cControllerRec, 2);
 
-        Write(I2cControllerRec, "1010000", X"A5");
+        Write(I2cControllerRec, "1010000", X"65");
 
-        -- TODO(intern): Write(I2cControllerRec, Addr, Data) then
-        -- Read/ReadCheck the same location back.
+        -- Read data differs from the byte just written, so this can't
+        -- pass by accident (e.g. a FIFO handing back stale write data).
+        Read(I2cControllerRec, "1010000", RData);
+        AffirmIfEqual(RData, X"34", "Controller received read data");
 
         WaitForBarrier(TestDone);
         wait;
@@ -84,11 +90,11 @@ begin
         wait until n_Reset = '1';
 
         GetWrite(I2cPeripheralRec, RxAddr, RxData);
-        AffirmIfEqual(RxAddr, "1010000", "Peripheral received address");
-        AffirmIfEqual(RxData, X"A5", "Peripheral received data");
+        AffirmIfEqual(RxAddr, "1010000", "Peripheral received address for write");
+        AffirmIfEqual(RxData, X"65", "Peripheral received data");
 
-        -- TODO(intern): provide the byte to be returned on a read
-        -- (SendRead), once ControllerProc issues one.
+        SendRead(I2cPeripheralRec, RxAddr, X"34");
+        AffirmIfEqual(RxAddr, "1010000", "Peripheral received address for read");
 
         WaitForBarrier(TestDone);
         wait;

@@ -16,6 +16,9 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.3        Read path: byte receive, controller-generated
+--                         ACK/NACK, NACK-terminated single-byte read,
+--                         READ_OP (#8)
 --    07/2026   0.2        Bus engine: START/STOP, byte transmit, ACK sampling;
 --                         WRITE_OP dispatch, 7-bit addressing (#6)
 --    07/2026   0.1        Initial skeleton
@@ -157,6 +160,35 @@ architecture model of I2cController is
         SCL <= '0';
     end procedure I2cSendByte;
 
+    -- Receive one byte MSB-first, then drive the 9th clock:
+    -- ACK ('0') if more bytes are expected, NACK ('1'/released) if this is
+    -- the last byte the controller wants.
+    procedure I2cReceiveByte(
+        signal   SCL, SDA : inout std_logic;
+        variable Byte     : inout std_logic_vector(7 downto 0);
+        constant IsLastByte : in    boolean
+    ) is
+    begin
+        for BitIdx in 7 downto 0 loop
+            -- We still generate SCL while receiving - only the data
+            -- direction changes, not who owns the clock.
+            wait for tSclLow;
+            SCL <= 'Z';
+            wait until SCL = 'H';
+            Byte(BitIdx) := to_x01(SDA);
+            wait for tSclHigh;
+            SCL <= '0';
+        end loop;
+
+        wait for tSdaChangeDelay;
+        SDA <= 'Z' when IsLastByte else '0';
+        wait for tSclLow - tSdaChangeDelay;
+        SCL <= 'Z';
+        wait until SCL = 'H';
+        wait for tSclHigh;
+        SCL <= '0';
+    end procedure I2cReceiveByte;
+
 begin
 
     -- Internal record-dispatch reference clock
@@ -180,6 +212,7 @@ begin
         alias Operation   : AddressBusOperationType is TransRec.Operation;
         variable AddrByte : std_logic_vector(7 downto 0);
         variable WData    : std_logic_vector(7 downto 0);
+        variable RData    : std_logic_vector(7 downto 0);
         variable Acked    : boolean;
     begin
         wait on ModelID;  -- wait until initialized
@@ -226,6 +259,38 @@ begin
                     Log(ModelID,
                         "Write Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
                         "  Data: " & to_hxstring(WData) &
+                        "  Operation# " & to_string(TransRec.Rdy),
+                        INFO,
+                        TransRec.StatusMsgOn
+                    );
+
+                when READ_OP =>
+                    -- 7-bit addressing only; R/W bit '1' = read
+                    AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '1';
+
+                    I2cStart(SCL, SDA);
+
+                    -- Send address byte
+                    I2cSendByte(SCL, SDA, AddrByte, Acked);
+                    AlertIfNot(ModelID, Acked,
+                        "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
+                        ERROR
+                    );
+                    Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
+                        "  ACK=" & to_string(Acked), DEBUG);
+
+                    -- Receive data byte. This byte is the last one: NACK it to stop.
+                    I2cReceiveByte(SCL, SDA, RData, IsLastByte => true);
+                    Log(ModelID, "Data byte " & to_hxstring(RData) &
+                        "  NACK (end of read)", DEBUG);
+
+                    I2cStop(SCL, SDA);
+
+                    TransRec.DataFromModel <= SafeResize(ModelID, RData, TransRec.DataFromModel'length);
+
+                    Log(ModelID,
+                        "Read Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
+                        "  Data: " & to_hxstring(RData) &
                         "  Operation# " & to_string(TransRec.Rdy),
                         INFO,
                         TransRec.StatusMsgOn

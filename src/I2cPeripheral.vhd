@@ -236,12 +236,11 @@ begin
                     DataByte := Pop(TransmitFifo);
 
                     for BitIdx in 7 downto 0 loop
-                        wait for tSdaChangeDelay;
                         SDA <= '0' when DataByte(BitIdx) = '0' else 'Z';
                         wait until rising_edge(SCL);
                         wait until falling_edge(SCL);
+                        wait for tSdaChangeDelay;
                     end loop;
-                    wait for tSdaChangeDelay;
                     SDA <= 'Z';  -- release for the controller's ACK/NACK
 
                     wait until rising_edge(SCL);
