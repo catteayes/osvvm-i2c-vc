@@ -78,11 +78,17 @@ begin
     -- Peripheral-side stimulus / checking
     ------------------------------------------------------------
     PeripheralProc : process
+        variable RxAddr : std_logic_vector(6 downto 0);
+        variable RxData : std_logic_vector(7 downto 0);
     begin
         wait until n_Reset = '1';
 
-        -- TODO(intern): receive the written byte and check it; provide
-        -- the byte to be returned on the read.
+        GetWrite(I2cPeripheralRec, RxAddr, RxData);
+        AffirmIfEqual(RxAddr, "1010000", "Peripheral received address");
+        AffirmIfEqual(RxData, X"A5", "Peripheral received data");
+
+        -- TODO(intern): provide the byte to be returned on a read
+        -- (SendRead), once ControllerProc issues one.
 
         WaitForBarrier(TestDone);
         wait;

@@ -48,7 +48,8 @@ package I2cComponentPkg is
     component I2cPeripheral is
         generic(
             MODEL_ID_NAME  : string := "";
-            TARGET_ADDRESS : std_logic_vector(6 downto 0) := "1010000"
+            TARGET_ADDRESS : std_logic_vector(6 downto 0) := "1010000";
+            SCL_PERIOD     : time   := I2C_SCL_PERIOD_400K
         );
         port(
             TransRec : inout I2cRecType;
