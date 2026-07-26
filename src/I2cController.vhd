@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.4        Multi-byte write/read (#10)
 --    07/2026   0.3        Read path: byte receive, controller-generated
 --                         ACK/NACK, NACK-terminated single-byte read,
 --                         READ_OP (#8)
@@ -42,6 +43,7 @@ library ieee;
 
 library osvvm;
     context osvvm.OsvvmContext;
+    use osvvm.ScoreboardPkg_slv.all;
 
 library osvvm_common;
     context osvvm_common.OsvvmCommonContext;
@@ -169,19 +171,22 @@ architecture model of I2cController is
         constant IsLastByte : in    boolean
     ) is
     begin
+        wait for tSdaChangeDelay;
+        SDA <= 'Z';
+
         for BitIdx in 7 downto 0 loop
             -- We still generate SCL while receiving - only the data
             -- direction changes, not who owns the clock.
-            wait for tSclLow;
+            wait for tSclLow - tSdaChangeDelay;
             SCL <= 'Z';
             wait until SCL = 'H';
             Byte(BitIdx) := to_x01(SDA);
             wait for tSclHigh;
             SCL <= '0';
+            wait for tSdaChangeDelay;
         end loop;
 
-        wait for tSdaChangeDelay;
-        SDA <= 'Z' when IsLastByte else '0';
+        SDA <= 'Z' when IsLastByte else '0'; --ACK/NACK
         wait for tSclLow - tSdaChangeDelay;
         SCL <= 'Z';
         wait until SCL = 'H';
@@ -214,8 +219,11 @@ begin
         variable WData    : std_logic_vector(7 downto 0);
         variable RData    : std_logic_vector(7 downto 0);
         variable Acked    : boolean;
+        variable NumBurstBytes : integer;
     begin
         wait on ModelID;  -- wait until initialized
+        TransRec.WriteBurstFifo <= NewID("WriteBurstFifo", ModelID, Search => PRIVATE_NAME);
+        TransRec.ReadBurstFifo <= NewID("ReadBurstFifo", ModelID, Search => PRIVATE_NAME);
 
         -- Idle bus state: both lines released (pulled high by the harness)
         SCL <= 'Z';
@@ -264,6 +272,46 @@ begin
                         TransRec.StatusMsgOn
                     );
 
+                when WRITE_BURST =>
+                    -- 7-bit addressing only; R/W bit '0' = write. One address phase
+                    -- followed by NumBurstBytes.
+                    AddrByte      := SafeResize(ModelID, TransRec.Address, 7) & '0';
+                    NumBurstBytes := TransRec.DataWidth;
+
+                    I2cStart(SCL, SDA);
+
+                    -- Send address byte
+                    I2cSendByte(SCL, SDA, AddrByte, Acked);
+                    AlertIfNot(ModelID, Acked,
+                        "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
+                        ERROR
+                    );
+                    Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
+                        "  ACK=" & to_string(Acked), DEBUG);
+
+                    for ByteIdx in 1 to NumBurstBytes loop
+                        WData := SafeResize(ModelID, Pop(TransRec.WriteBurstFifo), 8);
+
+                        I2cSendByte(SCL, SDA, WData, Acked);
+                        AlertIfNot(ModelID, Acked,
+                            "No ACK received for burst byte " & to_string(ByteIdx) &
+                            "/" & to_string(NumBurstBytes) & " (" & to_hxstring(WData) & ")",
+                            ERROR
+                        );
+                        Log(ModelID, "Write Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
+                            " " & to_hxstring(WData) & "  ACK=" & to_string(Acked), DEBUG);
+                    end loop;
+
+                    I2cStop(SCL, SDA);
+
+                    Log(ModelID,
+                        "Write Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
+                        "  Length: " & to_string(NumBurstBytes) &
+                        "  Operation# " & to_string(TransRec.Rdy),
+                        INFO,
+                        TransRec.StatusMsgOn
+                    );
+
                 when READ_OP =>
                     -- 7-bit addressing only; R/W bit '1' = read
                     AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '1';
@@ -291,6 +339,41 @@ begin
                     Log(ModelID,
                         "Read Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
                         "  Data: " & to_hxstring(RData) &
+                        "  Operation# " & to_string(TransRec.Rdy),
+                        INFO,
+                        TransRec.StatusMsgOn
+                    );
+
+                when READ_BURST =>
+                    -- 7-bit addressing only; R/W bit '1' = read
+                    AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '1';
+                    NumBurstBytes := TransRec.DataWidth;
+
+                    I2cStart(SCL, SDA);
+
+                    -- Send address byte
+                    I2cSendByte(SCL, SDA, AddrByte, Acked);
+                    AlertIfNot(ModelID, Acked,
+                        "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
+                        ERROR
+                    );
+                    Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
+                        "  ACK=" & to_string(Acked), DEBUG);
+
+                    for ByteIdx in 1 to NumBurstBytes loop
+                        I2cReceiveByte(SCL, SDA, RData, IsLastByte => (ByteIdx = NumBurstBytes));
+                        Log(ModelID, "Read Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
+                            " " & to_hxstring(RData) &
+                            "  ACK=" & to_string(not (ByteIdx = NumBurstBytes)), DEBUG);
+
+                        Push(TransRec.ReadBurstFifo, RData);
+                    end loop;
+                        
+                    I2cStop(SCL, SDA);
+
+                    Log(ModelID,
+                        "Read Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
+                        "  Length: " & to_string(NumBurstBytes) &
                         "  Operation# " & to_string(TransRec.Rdy),
                         INFO,
                         TransRec.StatusMsgOn

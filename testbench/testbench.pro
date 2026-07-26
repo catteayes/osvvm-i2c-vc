@@ -19,3 +19,4 @@ analyze TestCtrl_e.vhd
 analyze TbI2c.vhd
 
 RunTest TbI2c_WriteRead1.vhd
+RunTest TbI2c_Burst1.vhd

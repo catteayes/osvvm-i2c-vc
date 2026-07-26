@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.3        Multi-byte write/read (#10)
 --    07/2026   0.2        Bus engine: START/STOP detection, 7-bit address
 --                         match, ACK generation, byte receive/transmit;
 --                         WRITE_OP/READ_OP (#7)
@@ -128,7 +129,6 @@ begin
 
         TransactionDispatcherLoop : loop
             WaitForTransaction(
-                Clk => I2cClk,
                 Rdy => TransRec.Rdy,
                 Ack => TransRec.Ack
             );
@@ -196,6 +196,7 @@ begin
         variable DataByte  : std_logic_vector(7 downto 0);
         variable Addressed : boolean;
         variable IsRead    : boolean;
+        variable ControllerAcked : boolean;
     begin
         SDA <= 'Z';
 
@@ -228,47 +229,58 @@ begin
 
             if Addressed then
                 if IsRead then
-                    -- Byte transmit (read path): block until the sequencer
-                    -- has queued data with READ_OP/SendRead.
-                    if IsEmpty(TransmitFifo) then
-                        WaitForToggle(TransmitRequestCount);
-                    end if;
-                    DataByte := Pop(TransmitFifo);
+                    -- Sends bytes until controller NACKs
+                    ReadLoop : loop
+                        if IsEmpty(TransmitFifo) then
+                            WaitForToggle(TransmitRequestCount);
+                        end if;
+                        DataByte := Pop(TransmitFifo);
 
-                    for BitIdx in 7 downto 0 loop
-                        SDA <= '0' when DataByte(BitIdx) = '0' else 'Z';
+                        for BitIdx in 7 downto 0 loop
+                            SDA <= '0' when DataByte(BitIdx) = '0' else 'Z';
+                            wait until rising_edge(SCL);
+                            wait until falling_edge(SCL);
+                            wait for tSdaChangeDelay;
+                        end loop;
+                        SDA <= 'Z';  -- release for the controller's ACK/NACK
+
+                        wait until rising_edge(SCL);
+                        ControllerAcked := (to_x01(SDA) = '0');
+                        Log(ModelID,
+                            "Data byte " & to_hxstring(DataByte) &
+                            "  Controller ACK=" & to_string(ControllerAcked),
+                            DEBUG
+                        );
+                        wait until falling_edge(SCL);
+
+                        Increment(TransmitDoneCount);
+
+                        exit ReadLoop when not ControllerAcked;
+                    end loop ReadLoop;
+                else
+                    -- Receives bytes until controller stops instead of sending a new one.
+                    WriteLoop : loop
+                        wait until rising_edge(SCL);
+                        DataByte(7) := to_x01(SDA);
+                        wait until falling_edge(SCL) or (SDA'event and SCL = 'H');
+                        exit WriteLoop when SCL = 'H';
+
+                        for BitIdx in 6 downto 0 loop
+                            wait until rising_edge(SCL);
+                            DataByte(BitIdx) := to_x01(SDA);
+                        end loop;
+
+                        wait until falling_edge(SCL);
+                        wait for tSdaChangeDelay;
+                        SDA <= '0';  -- ACK the data byte
                         wait until rising_edge(SCL);
                         wait until falling_edge(SCL);
                         wait for tSdaChangeDelay;
-                    end loop;
-                    SDA <= 'Z';  -- release for the controller's ACK/NACK
+                        SDA <= 'Z';
 
-                    wait until rising_edge(SCL);
-                    Log(ModelID,
-                        "Data byte " & to_hxstring(DataByte) &
-                        "  Controller ACK=" & to_string(to_x01(SDA) = '0'),
-                        DEBUG
-                    );
-                    wait until falling_edge(SCL);
-
-                    Increment(TransmitDoneCount);
-                else
-                    -- Byte receive (write path): sample, ACK, release.
-                    for BitIdx in 7 downto 0 loop
-                        wait until rising_edge(SCL);
-                        DataByte(BitIdx) := to_x01(SDA);
-                    end loop;
-
-                    wait until falling_edge(SCL);
-                    wait for tSdaChangeDelay;
-                    SDA <= '0';  -- ACK the data byte
-                    wait until rising_edge(SCL);
-                    wait until falling_edge(SCL);
-                    wait for tSdaChangeDelay;
-                    SDA <= 'Z';
-
-                    Push(ReceiveFifo, DataByte);
-                    Increment(ReceiveCount);
+                        Push(ReceiveFifo, DataByte);
+                        Increment(ReceiveCount);
+                    end loop WriteLoop;
                 end if;
             end if;
         end loop BusEngineLoop;

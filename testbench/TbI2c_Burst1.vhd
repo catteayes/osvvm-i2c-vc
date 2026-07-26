@@ -1,20 +1,17 @@
 --
---  File Name:         TbI2c_WriteRead1.vhd
---  Design Unit Name:  architecture WriteRead1 of TestCtrl
+--  File Name:         TbI2c_Burst1.vhd
+--  Design Unit Name:  architecture Burst1 of TestCtrl
 --
 --  Maintainer:        Mehmet Burak Aykenar    email: burak.aykenar@anadologic.com
 --  Contributor(s):
 --     <intern name>
 --
 --  Description:
---      First test case: single-byte write then read to a 7-bit target
---      address. Self-checking via AffirmIfEqual on both the controller and
---      peripheral side.
+--      Multi byte burst test.
 --
 --  Revision History:
 --    Date      Version    Description
---    07/2026   0.2        Write and read, self-checking (#9)
---    07/2026   0.1        Initial skeleton
+--    07/2026   0.1        Initial burst write/read test (#10)
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
 --  you may not use this file except in compliance with the License.
@@ -29,9 +26,13 @@
 --  limitations under the License.
 --
 
-architecture WriteRead1 of TestCtrl is
+architecture Burst1 of TestCtrl is
 
     signal TestDone : integer_barrier := 1;
+
+    constant BURST_ADDR : std_logic_vector(6 downto 0)  := "1010000";
+    constant WriteBytes : slv_vector(0 to 2)(7 downto 0) := (X"11", X"22", X"33");
+    constant ReadBytes  : slv_vector(0 to 2)(7 downto 0) := (X"94", X"55", X"66");
 
 begin
 
@@ -40,7 +41,7 @@ begin
     ------------------------------------------------------------
     ControlProc : process
     begin
-        SetTestName("TbI2c_WriteRead1");
+        SetTestName("TbI2c_Burst1");
         SetLogEnable(PASSED, TRUE);
         SetLogEnable(DEBUG, TRUE);
 
@@ -64,15 +65,15 @@ begin
     -- Controller-side stimulus
     ------------------------------------------------------------
     ControllerProc : process
-        variable RData : std_logic_vector(7 downto 0);
     begin
         wait until n_Reset = '1';
         WaitForClock(I2cControllerRec, 2);
 
-        Write(I2cControllerRec, "1010000", X"65");
+        -- 3 data bytes
+        WriteBurstVector(I2cControllerRec, BURST_ADDR, WriteBytes);
 
-        Read(I2cControllerRec, "1010000", RData);
-        AffirmIfEqual(RData, X"34", "Controller received read data");
+        -- 3 bytes read
+        ReadCheckBurstVector(I2cControllerRec, BURST_ADDR, ReadBytes);
 
         WaitForBarrier(TestDone);
         wait;
@@ -87,23 +88,31 @@ begin
     begin
         wait until n_Reset = '1';
 
-        GetWrite(I2cPeripheralRec, RxAddr, RxData);
-        AffirmIfEqual(RxAddr, "1010000", "Peripheral received write address");
-        AffirmIfEqual(RxData, X"65", "Peripheral received data");
+        for i in WriteBytes'range loop
+            GetWrite(I2cPeripheralRec, RxAddr, RxData);
+            if i = WriteBytes'low then
+                AffirmIfEqual(RxAddr, BURST_ADDR, "Peripheral received write burst address");
+            end if;
+            AffirmIfEqual(RxData, WriteBytes(i), "Peripheral received burst byte " & to_string(i));
+        end loop;
 
-        SendRead(I2cPeripheralRec, RxAddr, X"34");
-        AffirmIfEqual(RxAddr, "1010000", "Peripheral received read address");
+        for i in ReadBytes'range loop
+            SendRead(I2cPeripheralRec, RxAddr, ReadBytes(i));
+            if i = ReadBytes'low then
+                AffirmIfEqual(RxAddr, BURST_ADDR, "Peripheral received read burst address");
+            end if;
+        end loop;
 
         WaitForBarrier(TestDone);
         wait;
     end process PeripheralProc;
 
-end architecture WriteRead1;
+end architecture Burst1;
 
-configuration TbI2c_WriteRead1 of TbI2c is
+configuration TbI2c_Burst1 of TbI2c is
     for TestHarness
         for TestCtrl_1 : TestCtrl
-            use entity work.TestCtrl(WriteRead1);
+            use entity work.TestCtrl(Burst1);
         end for;
     end for;
-end configuration TbI2c_WriteRead1;
+end configuration TbI2c_Burst1;
