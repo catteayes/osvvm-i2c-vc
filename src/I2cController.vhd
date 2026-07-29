@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.5        Repeated START (Sr) (#11)
 --    07/2026   0.4        Multi-byte write/read (#10)
 --    07/2026   0.3        Read path: byte receive, controller-generated
 --                         ACK/NACK, NACK-terminated single-byte read,
@@ -100,7 +101,7 @@ architecture model of I2cController is
     -- time old data must hold past SCL falling) is 0 ns for all three
     -- speed grades, so any nonnegative delay is legal; tVD;DAT/tVD;ACK
     -- (max time until new data must be valid) is tightest at Fast-mode-
-    -- Plus, 450 ns - this constant is comfortably under that at every
+    -- Plus, 450 ns. This constant is comfortably under that at every
     -- speed grade, and small enough that tSU;DAT (setup before SCL rises,
     -- at most 250 ns at Standard-mode) is easily met by whatever of
     -- tSclLow remains after it.
@@ -131,6 +132,20 @@ architecture model of I2cController is
         SDA <= 'Z';
         wait for tSclLow;   -- tBUF bus free time before the next START
     end procedure I2cStop;
+
+    -- Repeated START (Sr)
+    procedure I2cRepeatedStart(signal SCL, SDA : inout std_logic) is
+    begin
+        wait for tSdaChangeDelay;
+        SDA <= 'Z';
+        wait for tSclLow - tSdaChangeDelay;
+        SCL <= 'Z';
+        wait until SCL = 'H';
+        wait for tSclHigh;  -- tSU;STA setup time before SDA falls
+        SDA <= '0';
+        wait for tSclLow;   -- tHD;STA hold before the next byte's first low
+        SCL <= '0';
+    end procedure I2cRepeatedStart;
 
     -- Transmit one byte MSB-first, then release SDA on the 9th clock and
     -- sample the receiver's ACK ('0') / NACK ('1').
@@ -220,6 +235,8 @@ begin
         variable RData    : std_logic_vector(7 downto 0);
         variable Acked    : boolean;
         variable NumBurstBytes : integer;
+        variable RepeatedStartArmed : boolean := false;  -- set with SetRepeatedStart(TRUE)
+        variable BusHeldBySr        : boolean := false;  -- true when the previous transfer ended with Sr
     begin
         wait on ModelID;  -- wait until initialized
         TransRec.WriteBurstFifo <= NewID("WriteBurstFifo", ModelID, Search => PRIVATE_NAME);
@@ -230,8 +247,13 @@ begin
         SDA <= 'Z';
 
         TransactionDispatcherLoop : loop
+            -- Clockless: same fix as I2cPeripheral's dispatcher - the
+            -- clocked overload's internal Clk-alignment wait adds up to a
+            -- full I2cClk period of unrelated delay between the previous
+            -- transaction's own bus timing (e.g. I2cStop's tBUF) ending and
+            -- this transaction actually starting. I2cClk still drives
+            -- WAIT_FOR_CLOCK below, just not this pickup.
             WaitForTransaction(
-                Clk => I2cClk,
                 Rdy => TransRec.Rdy,
                 Ack => TransRec.Ack
             );
@@ -242,7 +264,11 @@ begin
                     AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '0';
                     WData    := SafeResize(ModelID, TransRec.DataToModel, 8);
 
-                    I2cStart(SCL, SDA);
+                    if BusHeldBySr then
+                        BusHeldBySr := false;
+                    else
+                        I2cStart(SCL, SDA);
+                    end if;
 
                     -- Send address byte
                     I2cSendByte(SCL, SDA, AddrByte, Acked);
@@ -262,7 +288,13 @@ begin
                     Log(ModelID, "Data byte " & to_hxstring(WData) &
                         "  ACK=" & to_string(Acked), DEBUG);
 
-                    I2cStop(SCL, SDA);
+                    if RepeatedStartArmed then
+                        I2cRepeatedStart(SCL, SDA);
+                        BusHeldBySr := true;
+                    else
+                        I2cStop(SCL, SDA);
+                    end if;
+                    RepeatedStartArmed := false;
 
                     Log(ModelID,
                         "Write Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
@@ -278,7 +310,11 @@ begin
                     AddrByte      := SafeResize(ModelID, TransRec.Address, 7) & '0';
                     NumBurstBytes := TransRec.DataWidth;
 
-                    I2cStart(SCL, SDA);
+                    if BusHeldBySr then
+                        BusHeldBySr := false;
+                    else
+                        I2cStart(SCL, SDA);
+                    end if;
 
                     -- Send address byte
                     I2cSendByte(SCL, SDA, AddrByte, Acked);
@@ -302,7 +338,13 @@ begin
                             " " & to_hxstring(WData) & "  ACK=" & to_string(Acked), DEBUG);
                     end loop;
 
-                    I2cStop(SCL, SDA);
+                    if RepeatedStartArmed then
+                        I2cRepeatedStart(SCL, SDA);
+                        BusHeldBySr := true;
+                    else
+                        I2cStop(SCL, SDA);
+                    end if;
+                    RepeatedStartArmed := false;
 
                     Log(ModelID,
                         "Write Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
@@ -316,7 +358,11 @@ begin
                     -- 7-bit addressing only; R/W bit '1' = read
                     AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '1';
 
-                    I2cStart(SCL, SDA);
+                    if BusHeldBySr then
+                        BusHeldBySr := false;
+                    else
+                        I2cStart(SCL, SDA);
+                    end if;
 
                     -- Send address byte
                     I2cSendByte(SCL, SDA, AddrByte, Acked);
@@ -332,7 +378,13 @@ begin
                     Log(ModelID, "Data byte " & to_hxstring(RData) &
                         "  NACK (end of read)", DEBUG);
 
-                    I2cStop(SCL, SDA);
+                    if RepeatedStartArmed then
+                        I2cRepeatedStart(SCL, SDA);
+                        BusHeldBySr := true;
+                    else
+                        I2cStop(SCL, SDA);
+                    end if;
+                    RepeatedStartArmed := false;
 
                     TransRec.DataFromModel <= SafeResize(ModelID, RData, TransRec.DataFromModel'length);
 
@@ -349,7 +401,11 @@ begin
                     AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '1';
                     NumBurstBytes := TransRec.DataWidth;
 
-                    I2cStart(SCL, SDA);
+                    if BusHeldBySr then
+                        BusHeldBySr := false;
+                    else
+                        I2cStart(SCL, SDA);
+                    end if;
 
                     -- Send address byte
                     I2cSendByte(SCL, SDA, AddrByte, Acked);
@@ -368,8 +424,14 @@ begin
 
                         Push(TransRec.ReadBurstFifo, RData);
                     end loop;
-                        
-                    I2cStop(SCL, SDA);
+
+                    if RepeatedStartArmed then
+                        I2cRepeatedStart(SCL, SDA);
+                        BusHeldBySr := true;
+                    else
+                        I2cStop(SCL, SDA);
+                    end if;
+                    RepeatedStartArmed := false;
 
                     Log(ModelID,
                         "Read Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
@@ -378,6 +440,19 @@ begin
                         INFO,
                         TransRec.StatusMsgOn
                     );
+
+                when SET_MODEL_OPTIONS =>
+                    case TransRec.Options is
+                        when I2cOptionType'pos(SET_REPEATED_START) =>
+                            RepeatedStartArmed := TransRec.BoolToModel;
+                            Log(ModelID, "Set Repeated Start = " &
+                                to_string(TransRec.BoolToModel), INFO);
+
+                        when others =>
+                            Alert(ModelID, "Unimplemented Option: " &
+                                to_string(I2cOptionType'val(TransRec.Options)),
+                                FAILURE);
+                    end case;
 
                 when GET_ALERTLOG_ID =>
                     TransRec.IntFromModel <= integer(ModelID);

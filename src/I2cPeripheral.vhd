@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.4        Repeated START (Sr) (#11)
 --    07/2026   0.3        Multi-byte write/read (#10)
 --    07/2026   0.2        Bus engine: START/STOP detection, 7-bit address
 --                         match, ACK generation, byte receive/transmit;
@@ -197,6 +198,7 @@ begin
         variable Addressed : boolean;
         variable IsRead    : boolean;
         variable ControllerAcked : boolean;
+        variable SrDetected : boolean := false;
     begin
         SDA <= 'Z';
 
@@ -204,7 +206,11 @@ begin
             -- START (or repeated START): SDA falls while SCL is high.
             -- This also doubles as "go idle on STOP" without any
             -- separate STOP handling.
-            wait until falling_edge(SDA) and SCL = 'H';
+            if SrDetected then
+                SrDetected := false;
+            else
+                wait until falling_edge(SDA) and SCL = 'H';
+            end if;
 
             -- Address + R/W byte, MSB first, based on the controller's
             -- SCL rising edges.
@@ -263,7 +269,13 @@ begin
                         wait until rising_edge(SCL);
                         DataByte(7) := to_x01(SDA);
                         wait until falling_edge(SCL) or (SDA'event and SCL = 'H');
-                        exit WriteLoop when SCL = 'H';
+                        if SCL = 'H' then
+                            -- SDA fell => Sr, another transfer follows immediately
+                            -- with no idle gap in between (see SrDetected above).
+                            -- SDA rose => STOP, go idle as before.
+                            SrDetected := (to_x01(SDA) = '0');
+                            exit WriteLoop;
+                        end if;
 
                         for BitIdx in 6 downto 0 loop
                             wait until rising_edge(SCL);

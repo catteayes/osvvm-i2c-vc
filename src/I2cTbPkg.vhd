@@ -12,6 +12,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.2        I2cOptionType / SetRepeatedStart (#11)
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,6 +63,28 @@ package I2cTbPkg is
     constant I2C_SCL_PERIOD_1M   : time := 1 us;     -- Fast-mode Plus
 
     ----------------------------------------------------------------------------
+    -- I2C VC Options (SetModelOptions / GetModelOptions), see
+    -- docs/TransactionInterface.md. More options (SCL period override,
+    -- clock stretch enable, NACK injection, ...) join this enum as they're
+    -- implemented (#13).
+    ----------------------------------------------------------------------------
+    type I2cOptionType is (
+        SET_REPEATED_START
+    );
+
+    ----------------------------------------------------------------------------
+    -- Setters
+    ----------------------------------------------------------------------------
+    -- One-time-use: makes the *next* Write/Read end with a repeated START
+    -- (Sr) instead of STOP (P), for a "write a register pointer, then read
+    -- from it without releasing the bus" idiom. Consumed by the VC after
+    -- that one transfer - back to normal STOP by default (#11).
+    procedure SetRepeatedStart(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
+    );
+
+    ----------------------------------------------------------------------------
     -- TODO(intern):
     --   * VC option types (SCL period override, clock stretching enable, ...)
     --     set via SetModelOptions / ModelParametersPkg
@@ -70,3 +93,17 @@ package I2cTbPkg is
     ----------------------------------------------------------------------------
 
 end package I2cTbPkg;
+
+package body I2cTbPkg is
+
+    procedure SetRepeatedStart(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_REPEATED_START),
+                        Value);
+    end procedure SetRepeatedStart;
+
+end package body I2cTbPkg;
