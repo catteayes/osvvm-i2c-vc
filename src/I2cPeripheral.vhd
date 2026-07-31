@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.5        NACK injection (#12)
 --    07/2026   0.4        Repeated START (Sr) (#11)
 --    07/2026   0.3        Multi-byte write/read (#10)
 --    07/2026   0.2        Bus engine: START/STOP detection, 7-bit address
@@ -81,7 +82,7 @@ architecture model of I2cPeripheral is
     -- controller's actual SCL edges, not to any clock of its own.
     signal I2cClk : std_logic := '0';
 
-    constant tSdaChangeDelay : time := 50 ns;
+    constant tSdaChangeDelay : time := 200 ns;
 
     -- Bytes the controller has written to this target, handed to the
     -- sequencer by a blocking WRITE_OP (GetWrite).
@@ -93,6 +94,12 @@ architecture model of I2cPeripheral is
     signal TransmitFifo         : osvvm.ScoreboardPkg_slv.ScoreboardIDType;
     signal TransmitRequestCount : integer := 0;
     signal TransmitDoneCount    : integer := 0;
+
+    -- One-time-use: -1 = NACK the address byte, >=0 = NACK that 0-based
+    -- (write) data byte index. Driven by TransactionDispatcher, BusEngine
+    -- only reads these.
+    signal NackInjectByteIndex    : integer := -1;
+    signal NackInjectRequestCount : integer := 0;
 
 begin
 
@@ -171,6 +178,20 @@ begin
                         TransRec.StatusMsgOn
                     );
 
+                when SET_MODEL_OPTIONS =>
+                    case TransRec.Options is
+                        when I2cOptionType'pos(SET_NACK_INJECT) =>
+                            NackInjectByteIndex    <= TransRec.IntToModel;
+                            NackInjectRequestCount <= NackInjectRequestCount + 1;
+                            Log(ModelID, "Set NACK Inject, ByteIndex = " &
+                                to_string(TransRec.IntToModel), INFO);
+
+                        when others =>
+                            Alert(ModelID, "Unimplemented Option: " &
+                                to_string(I2cOptionType'val(TransRec.Options)),
+                                FAILURE);
+                    end case;
+
                 when GET_ALERTLOG_ID =>
                     TransRec.IntFromModel <= integer(ModelID);
 
@@ -199,6 +220,12 @@ begin
         variable IsRead    : boolean;
         variable ControllerAcked : boolean;
         variable SrDetected : boolean := false;
+        variable AddressNacked : boolean;
+        variable DataNacked    : boolean;
+        variable WriteByteIdx  : integer;  -- 0-based
+        variable NackArmed         : boolean := false;
+        variable NackByteIndexCopy : integer := -1;
+        variable SeenNackRequests  : integer := 0;
     begin
         SDA <= 'Z';
 
@@ -222,9 +249,15 @@ begin
             Addressed := (AddrByte(7 downto 1) = TARGET_ADDRESS);
             IsRead    := (AddrByte(0) = '1');
 
-            -- ACK slot: drive '0' only if addressed, then release.
+            if NackInjectRequestCount /= SeenNackRequests then
+                SeenNackRequests  := NackInjectRequestCount;
+                NackByteIndexCopy := NackInjectByteIndex;
+                NackArmed         := true;
+            end if;
+            AddressNacked := Addressed and NackArmed and (NackByteIndexCopy = -1);
+
             wait until falling_edge(SCL);
-            if Addressed then
+            if Addressed and not AddressNacked then
                 wait for tSdaChangeDelay;
                 SDA <= '0';
             end if;
@@ -233,7 +266,14 @@ begin
             wait for tSdaChangeDelay;
             SDA <= 'Z';
 
-            if Addressed then
+            if AddressNacked then
+                NackArmed := false;  -- consumed
+                Log(ModelID, "Address NACK injected: " &
+                    to_hxstring(AddrByte(7 downto 1)), INFO);
+            end if;
+
+            if Addressed and not AddressNacked then
+                WriteByteIdx := 0;
                 if IsRead then
                     -- Sends bytes until controller NACKs
                     ReadLoop : loop
@@ -282,16 +322,34 @@ begin
                             DataByte(BitIdx) := to_x01(SDA);
                         end loop;
 
+                        if NackInjectRequestCount /= SeenNackRequests then
+                            SeenNackRequests  := NackInjectRequestCount;
+                            NackByteIndexCopy := NackInjectByteIndex;
+                            NackArmed         := true;
+                        end if;
+                        DataNacked := NackArmed and (NackByteIndexCopy = WriteByteIdx);
+
                         wait until falling_edge(SCL);
                         wait for tSdaChangeDelay;
-                        SDA <= '0';  -- ACK the data byte
+                        if not DataNacked then
+                            SDA <= '0';  -- ACK the data byte
+                        end if;
                         wait until rising_edge(SCL);
                         wait until falling_edge(SCL);
                         wait for tSdaChangeDelay;
                         SDA <= 'Z';
 
+                        if DataNacked then
+                            NackArmed := false;  -- consumed
+                            Log(ModelID, "Data byte " & to_hxstring(DataByte) &
+                                " NACK injected (index " & to_string(WriteByteIdx) & ")",
+                                INFO);
+                            exit WriteLoop;  -- Stop receiving after NACKing data
+                        end if;
+
                         Push(ReceiveFifo, DataByte);
                         Increment(ReceiveCount);
+                        WriteByteIdx := WriteByteIdx + 1;
                     end loop WriteLoop;
                 end if;
             end if;

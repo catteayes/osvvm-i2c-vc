@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.7        NACK injection (#12)
 --    07/2026   0.5        Repeated START (Sr) (#11)
 --    07/2026   0.4        Multi-byte write/read (#10)
 --    07/2026   0.3        Read path: byte receive, controller-generated
@@ -105,7 +106,7 @@ architecture model of I2cController is
     -- speed grade, and small enough that tSU;DAT (setup before SCL rises,
     -- at most 250 ns at Standard-mode) is easily met by whatever of
     -- tSclLow remains after it.
-    constant tSdaChangeDelay : time := 50 ns;
+    constant tSdaChangeDelay : time := 200 ns;
 
     -- Open-drain only: every drive here is either '0' or 'Z'.
     -- Data (SDA) only changes while
@@ -237,6 +238,9 @@ begin
         variable NumBurstBytes : integer;
         variable RepeatedStartArmed : boolean := false;  -- set with SetRepeatedStart(TRUE)
         variable BusHeldBySr        : boolean := false;  -- true when the previous transfer ended with Sr
+        variable NackInjectArmed     : boolean := false;
+        variable NackInjectByteIndex : integer := -1;
+        variable NackDataArmed       : boolean;  -- if this byte matches NackInjectByteIndex
     begin
         wait on ModelID;  -- wait until initialized
         TransRec.WriteBurstFifo <= NewID("WriteBurstFifo", ModelID, Search => PRIVATE_NAME);
@@ -279,16 +283,17 @@ begin
                     Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
                         "  ACK=" & to_string(Acked), DEBUG);
 
-                    -- Send data byte
-                    I2cSendByte(SCL, SDA, WData, Acked);
-                    AlertIfNot(ModelID, Acked,
-                        "No ACK received for data " & to_hxstring(WData),
-                        ERROR
-                    );
-                    Log(ModelID, "Data byte " & to_hxstring(WData) &
-                        "  ACK=" & to_string(Acked), DEBUG);
+                    if Acked then
+                        I2cSendByte(SCL, SDA, WData, Acked);
+                        AlertIfNot(ModelID, Acked,
+                            "No ACK received for data " & to_hxstring(WData),
+                            ERROR
+                        );
+                        Log(ModelID, "Data byte " & to_hxstring(WData) &
+                            "  ACK=" & to_string(Acked), DEBUG);
+                    end if;
 
-                    if RepeatedStartArmed then
+                    if RepeatedStartArmed and Acked then
                         I2cRepeatedStart(SCL, SDA);
                         BusHeldBySr := true;
                     else
@@ -325,20 +330,29 @@ begin
                     Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
                         "  ACK=" & to_string(Acked), DEBUG);
 
-                    for ByteIdx in 1 to NumBurstBytes loop
-                        WData := SafeResize(ModelID, Pop(TransRec.WriteBurstFifo), 8);
+                    if Acked then
+                        for ByteIdx in 1 to NumBurstBytes loop
+                            WData := SafeResize(ModelID, Pop(TransRec.WriteBurstFifo), 8);
 
-                        I2cSendByte(SCL, SDA, WData, Acked);
-                        AlertIfNot(ModelID, Acked,
-                            "No ACK received for burst byte " & to_string(ByteIdx) &
-                            "/" & to_string(NumBurstBytes) & " (" & to_hxstring(WData) & ")",
-                            ERROR
-                        );
-                        Log(ModelID, "Write Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
-                            " " & to_hxstring(WData) & "  ACK=" & to_string(Acked), DEBUG);
+                            I2cSendByte(SCL, SDA, WData, Acked);
+                            AlertIfNot(ModelID, Acked,
+                                "No ACK received for burst byte " & to_string(ByteIdx) &
+                                "/" & to_string(NumBurstBytes) & " (" & to_hxstring(WData) & ")",
+                                ERROR
+                            );
+                            Log(ModelID, "Write Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
+                                " " & to_hxstring(WData) & "  ACK=" & to_string(Acked), DEBUG);
+
+                            exit when not Acked;
+                        end loop;
+                    end if;
+
+                    -- Empty burst bytes left.
+                    while not IsEmpty(TransRec.WriteBurstFifo) loop
+                        WData := Pop(TransRec.WriteBurstFifo);
                     end loop;
 
-                    if RepeatedStartArmed then
+                    if RepeatedStartArmed and Acked then
                         I2cRepeatedStart(SCL, SDA);
                         BusHeldBySr := true;
                     else
@@ -373,12 +387,16 @@ begin
                     Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
                         "  ACK=" & to_string(Acked), DEBUG);
 
-                    -- Receive data byte. This byte is the last one: NACK it to stop.
-                    I2cReceiveByte(SCL, SDA, RData, IsLastByte => true);
-                    Log(ModelID, "Data byte " & to_hxstring(RData) &
-                        "  NACK (end of read)", DEBUG);
+                    if Acked then
+                        -- This byte is the last one: NACK it to stop.
+                        I2cReceiveByte(SCL, SDA, RData, IsLastByte => true);
+                        Log(ModelID, "Data byte " & to_hxstring(RData) &
+                            "  NACK (end of read)", DEBUG);
+                    else
+                        RData := (others => '0');
+                    end if;
 
-                    if RepeatedStartArmed then
+                    if RepeatedStartArmed and Acked then
                         I2cRepeatedStart(SCL, SDA);
                         BusHeldBySr := true;
                     else
@@ -416,16 +434,41 @@ begin
                     Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
                         "  ACK=" & to_string(Acked), DEBUG);
 
-                    for ByteIdx in 1 to NumBurstBytes loop
-                        I2cReceiveByte(SCL, SDA, RData, IsLastByte => (ByteIdx = NumBurstBytes));
-                        Log(ModelID, "Read Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
-                            " " & to_hxstring(RData) &
-                            "  ACK=" & to_string(not (ByteIdx = NumBurstBytes)), DEBUG);
+                    if Acked then
+                        for ByteIdx in 1 to NumBurstBytes loop
+                            -- NackInjectByteIndex is 0-based; ByteIdx is 1-based.
+                            NackDataArmed := NackInjectArmed and (NackInjectByteIndex = ByteIdx - 1);
 
-                        Push(TransRec.ReadBurstFifo, RData);
-                    end loop;
+                            I2cReceiveByte(SCL, SDA, RData, IsLastByte => (ByteIdx = NumBurstBytes) or NackDataArmed);
+                            Log(ModelID, "Read Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
+                                " " & to_hxstring(RData) &
+                                "  ACK=" & to_string(not ((ByteIdx = NumBurstBytes) or NackDataArmed)), DEBUG);
 
-                    if RepeatedStartArmed then
+                            Push(TransRec.ReadBurstFifo, RData);
+
+                            if NackDataArmed then
+                                NackInjectArmed := false;  -- consumed
+                                Alert(ModelID, "Read data byte NACK injected (index " &
+                                    to_string(ByteIdx - 1) & "), ending read early", ERROR);
+                                -- The peraipheral's ReadLoop also exits on this
+                                -- NACK, so it isn't sending any more bytes,
+                                -- fill the rest with placeholders so
+                                -- ReadCheckBurstVector's Pop count matches.
+                                for FillIdx in ByteIdx + 1 to NumBurstBytes loop
+                                    Push(TransRec.ReadBurstFifo, std_logic_vector'(X"00"));
+                                end loop;
+                                exit;
+                            end if;
+                        end loop;
+                    else
+                        -- Push NumBurstBytes placeholders so
+                        -- ReadCheckBurstVector's Pop count doesn't underflow.
+                        for ByteIdx in 1 to NumBurstBytes loop
+                            Push(TransRec.ReadBurstFifo, std_logic_vector'(X"00"));
+                        end loop;
+                    end if;
+
+                    if RepeatedStartArmed and Acked then
                         I2cRepeatedStart(SCL, SDA);
                         BusHeldBySr := true;
                     else
@@ -447,6 +490,12 @@ begin
                             RepeatedStartArmed := TransRec.BoolToModel;
                             Log(ModelID, "Set Repeated Start = " &
                                 to_string(TransRec.BoolToModel), INFO);
+
+                        when I2cOptionType'pos(SET_NACK_INJECT) =>
+                            NackInjectByteIndex := TransRec.IntToModel;
+                            NackInjectArmed     := true;
+                            Log(ModelID, "Set NACK Inject, ByteIndex = " &
+                                to_string(TransRec.IntToModel), INFO);
 
                         when others =>
                             Alert(ModelID, "Unimplemented Option: " &

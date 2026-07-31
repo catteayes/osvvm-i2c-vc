@@ -12,6 +12,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.3        SetNackInjectAddress / SetNackInjectDataByte (#12)
 --    07/2026   0.2        I2cOptionType / SetRepeatedStart (#11)
 --    07/2026   0.1        Initial skeleton
 --
@@ -69,7 +70,8 @@ package I2cTbPkg is
     -- implemented (#13).
     ----------------------------------------------------------------------------
     type I2cOptionType is (
-        SET_REPEATED_START
+        SET_REPEATED_START,
+        SET_NACK_INJECT
     );
 
     ----------------------------------------------------------------------------
@@ -84,11 +86,21 @@ package I2cTbPkg is
         constant Value          : boolean
     );
 
+    -- NACK injection: force a NACK on either the address byte or
+    -- a data byte (by 0 based index) of the next transfer, one-time-use.
+    procedure SetNackInjectAddress(
+        signal TransactionRec : inout I2cRecType
+    );
+
+    procedure SetNackInjectDataByte(
+        signal   TransactionRec : inout I2cRecType;
+        constant ByteIndex      : natural
+    );
+
     ----------------------------------------------------------------------------
     -- TODO(intern):
     --   * VC option types (SCL period override, clock stretching enable, ...)
     --     set via SetModelOptions / ModelParametersPkg
-    --   * Error injection types (force NACK, arbitration loss, ...)
     --   * to_string / logging helpers as needed
     ----------------------------------------------------------------------------
 
@@ -105,5 +117,24 @@ package body I2cTbPkg is
                         I2cOptionType'pos(SET_REPEATED_START),
                         Value);
     end procedure SetRepeatedStart;
+
+    procedure SetNackInjectAddress(
+        signal TransactionRec : inout I2cRecType
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_NACK_INJECT),
+                        -1);
+    end procedure SetNackInjectAddress;
+
+    procedure SetNackInjectDataByte(
+        signal   TransactionRec : inout I2cRecType;
+        constant ByteIndex      : natural
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_NACK_INJECT),
+                        ByteIndex);
+    end procedure SetNackInjectDataByte;
 
 end package body I2cTbPkg;
