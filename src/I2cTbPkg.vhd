@@ -12,6 +12,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.4        SetSclPeriod / SetTimeout (#13)
 --    07/2026   0.3        SetNackInjectAddress / SetNackInjectDataByte (#12)
 --    07/2026   0.2        I2cOptionType / SetRepeatedStart (#11)
 --    07/2026   0.1        Initial skeleton
@@ -64,23 +65,28 @@ package I2cTbPkg is
     constant I2C_SCL_PERIOD_1M   : time := 1 us;     -- Fast-mode Plus
 
     ----------------------------------------------------------------------------
-    -- I2C VC Options (SetModelOptions / GetModelOptions), see
-    -- docs/TransactionInterface.md. More options (SCL period override,
-    -- clock stretch enable, NACK injection, ...) join this enum as they're
-    -- implemented (#13).
+    -- I2C VC Options (SetModelOptions / GetModelOptions).
+    -- See docs/TransactionInterface.md
+    --   SET_REPEATED_START  - I2cController only
+    --   SET_NACK_INJECT     - I2cController (read-data bytes) and
+    --                         I2cPeripheral (address / write-data bytes)
+    --   SET_SCL_PERIOD      - I2cController only
+    --   SET_TIMEOUT         - I2cController only
     ----------------------------------------------------------------------------
     type I2cOptionType is (
         SET_REPEATED_START,
-        SET_NACK_INJECT
+        SET_NACK_INJECT,
+        SET_SCL_PERIOD,
+        SET_TIMEOUT
     );
 
     ----------------------------------------------------------------------------
     -- Setters
     ----------------------------------------------------------------------------
-    -- One-time-use: makes the *next* Write/Read end with a repeated START
-    -- (Sr) instead of STOP (P), for a "write a register pointer, then read
-    -- from it without releasing the bus" idiom. Consumed by the VC after
-    -- that one transfer - back to normal STOP by default (#11).
+    -- One-time-use: makes the next Write/Read end with a repeated START
+    -- (Sr) instead of STOP (P) (for a "write a register pointer, then read
+    -- from it without releasing the bus" idiom, for instance). Consumed by
+    -- the VC after one transfer and back to STOP.
     procedure SetRepeatedStart(
         signal   TransactionRec : inout I2cRecType;
         constant Value          : boolean
@@ -97,12 +103,19 @@ package I2cTbPkg is
         constant ByteIndex      : natural
     );
 
-    ----------------------------------------------------------------------------
-    -- TODO(intern):
-    --   * VC option types (SCL period override, clock stretching enable, ...)
-    --     set via SetModelOptions / ModelParametersPkg
-    --   * to_string / logging helpers as needed
-    ----------------------------------------------------------------------------
+    procedure SetSclPeriod(
+        signal   TransactionRec : inout I2cRecType;
+        constant Period         : time
+    );
+
+    -- Bus timeout (I2cController only): the longest the controller will
+    -- wait for SCL to actually respond (release high) during START/STOP/Sr,
+    -- byte transmit or ACK/NACK sampling, before Alerting FAILURE instead
+    -- of hanging the simulation forever on a stuck bus.
+    procedure SetTimeout(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : time
+    );
 
 end package I2cTbPkg;
 
@@ -136,5 +149,25 @@ package body I2cTbPkg is
                         I2cOptionType'pos(SET_NACK_INJECT),
                         ByteIndex);
     end procedure SetNackInjectDataByte;
+
+    procedure SetSclPeriod(
+        signal   TransactionRec : inout I2cRecType;
+        constant Period         : time
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_SCL_PERIOD),
+                        Period);
+    end procedure SetSclPeriod;
+
+    procedure SetTimeout(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : time
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_TIMEOUT),
+                        Value);
+    end procedure SetTimeout;
 
 end package body I2cTbPkg;

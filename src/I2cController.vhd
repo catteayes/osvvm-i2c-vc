@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.8        SetSclPeriod and SetTimeout (#13)
 --    07/2026   0.7        NACK injection (#12)
 --    07/2026   0.5        Repeated START (Sr) (#11)
 --    07/2026   0.4        Multi-byte write/read (#10)
@@ -93,8 +94,12 @@ architecture model of I2cController is
     -- Intersecting all three gives a valid range of r in [0.52, 0.60],
     -- bound below by Fast-mode's tLOW minimum and above by Standard-mode's
     -- tHIGH minimum. 0.55 is close to the center of that, and thus was chosen.
-    constant tSclLow  : time := (SCL_PERIOD * 11) / 20;     -- 55%
-    constant tSclHigh : time := SCL_PERIOD - tSclLow;       -- 45% = 1 - 0.55
+    -- Settable with SetSclPeriod.
+    signal SclPeriod : time := SCL_PERIOD;
+    signal tSclLow  : time := (SCL_PERIOD * 11) / 20;     -- 55%
+    signal tSclHigh : time := SCL_PERIOD - (SCL_PERIOD * 11) / 20;  -- 45% = 1 - 0.55
+
+    signal BusTimeout : time := 1 sec;
 
     -- Small, fixed delay between SCL falling and SDA changing for the next bit.
     -- This tries to mimic a real I2C controller's output-driver propagation delay.
@@ -107,6 +112,15 @@ architecture model of I2cController is
     -- at most 250 ns at Standard-mode) is easily met by whatever of
     -- tSclLow remains after it.
     constant tSdaChangeDelay : time := 200 ns;
+
+    procedure WaitSclHigh(signal SCL : in std_logic) is
+    begin
+        wait until SCL = 'H' for BusTimeout;
+        AlertIfNot(ModelID, SCL = 'H',
+            "I2C bus timeout: SCL never released within " & to_string(BusTimeout, 1 ns),
+            FAILURE
+        );
+    end procedure WaitSclHigh;
 
     -- Open-drain only: every drive here is either '0' or 'Z'.
     -- Data (SDA) only changes while
@@ -128,7 +142,7 @@ architecture model of I2cController is
         SDA <= '0';
         wait for tSclLow - tSdaChangeDelay;
         SCL <= 'Z';
-        wait until SCL = 'H';
+        WaitSclHigh(SCL);
         wait for tSclHigh;  -- tSU;STO setup time before SDA rises
         SDA <= 'Z';
         wait for tSclLow;   -- tBUF bus free time before the next START
@@ -141,7 +155,7 @@ architecture model of I2cController is
         SDA <= 'Z';
         wait for tSclLow - tSdaChangeDelay;
         SCL <= 'Z';
-        wait until SCL = 'H';
+        WaitSclHigh(SCL);
         wait for tSclHigh;  -- tSU;STA setup time before SDA falls
         SDA <= '0';
         wait for tSclLow;   -- tHD;STA hold before the next byte's first low
@@ -162,7 +176,7 @@ architecture model of I2cController is
             SDA <= '0' when Byte(BitIdx) = '0' else 'Z';
             wait for tSclLow - tSdaChangeDelay;
             SCL <= 'Z';
-            wait until SCL = 'H';
+            WaitSclHigh(SCL);
             wait for tSclHigh;
             SCL <= '0';
         end loop;
@@ -172,7 +186,7 @@ architecture model of I2cController is
         SDA <= 'Z';
         wait for tSclLow - tSdaChangeDelay;
         SCL <= 'Z';
-        wait until SCL = 'H';
+        WaitSclHigh(SCL);
         Acked := (SDA = '0');
         wait for tSclHigh;
         SCL <= '0';
@@ -195,7 +209,7 @@ architecture model of I2cController is
             -- direction changes, not who owns the clock.
             wait for tSclLow - tSdaChangeDelay;
             SCL <= 'Z';
-            wait until SCL = 'H';
+            WaitSclHigh(SCL);
             Byte(BitIdx) := to_x01(SDA);
             wait for tSclHigh;
             SCL <= '0';
@@ -205,7 +219,7 @@ architecture model of I2cController is
         SDA <= 'Z' when IsLastByte else '0'; --ACK/NACK
         wait for tSclLow - tSdaChangeDelay;
         SCL <= 'Z';
-        wait until SCL = 'H';
+        WaitSclHigh(SCL);
         wait for tSclHigh;
         SCL <= '0';
     end procedure I2cReceiveByte;
@@ -214,6 +228,10 @@ begin
 
     -- Internal record-dispatch reference clock
     I2cClk <= not I2cClk after SCL_PERIOD / 2;
+
+    -- Change tSclLow/tSclHigh whenever SetSclPeriod changes SclPeriod.
+    tSclLow  <= (SclPeriod * 11) / 20;
+    tSclHigh <= SclPeriod - tSclLow;
 
     ----------------------------------------------------------------------------
     --  Initialize alerts and data structures
@@ -496,6 +514,16 @@ begin
                             NackInjectArmed     := true;
                             Log(ModelID, "Set NACK Inject, ByteIndex = " &
                                 to_string(TransRec.IntToModel), INFO);
+
+                        when I2cOptionType'pos(SET_SCL_PERIOD) =>
+                            SclPeriod <= TransRec.TimeToModel;
+                            Log(ModelID, "Set SCL Period = " &
+                                to_string(TransRec.TimeToModel, 1 ns), INFO);
+
+                        when I2cOptionType'pos(SET_TIMEOUT) =>
+                            BusTimeout <= TransRec.TimeToModel;
+                            Log(ModelID, "Set Bus Timeout = " &
+                                to_string(TransRec.TimeToModel, 1 ns), INFO);
 
                         when others =>
                             Alert(ModelID, "Unimplemented Option: " &
