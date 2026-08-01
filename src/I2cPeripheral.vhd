@@ -16,6 +16,8 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.7        10-bit addressing (#15) and bug fix for clock stretching
+--                         after an ACK bit
 --    07/2026   0.6        Clock stretching (#14) and failed NACK injection alert
 --    07/2026   0.5        NACK injection (#12)
 --    07/2026   0.4        Repeated START (Sr) (#11)
@@ -54,7 +56,12 @@ use work.I2cTbPkg.all;
 entity I2cPeripheral is
     generic(
         MODEL_ID_NAME  : string := "";
-        TARGET_ADDRESS : std_logic_vector(6 downto 0) := "1010000";  -- 0x50
+        -- 7-bit mode (default): only TARGET_ADDRESS(6 downto 0) is used,
+        -- matching the address literal width a 7-bit test passes to
+        -- Write/Read. 10-bit mode (#15): set TEN_BIT_ADDR => true and use
+        -- the full 10 bits.
+        TARGET_ADDRESS : std_logic_vector(9 downto 0) := "0001010000";  -- 0x50 (7-bit)
+        TEN_BIT_ADDR   : boolean := false;
         SCL_PERIOD     : time   := I2C_SCL_PERIOD_400K
     );
     port(
@@ -233,6 +240,7 @@ begin
     ----------------------------------------------------------------------------
     BusEngine : process
         variable AddrByte  : std_logic_vector(7 downto 0);
+        variable Addr2     : std_logic_vector(7 downto 0);  -- 10-bit addressing's second byte
         variable DataByte  : std_logic_vector(7 downto 0);
         variable Addressed : boolean;
         variable IsRead    : boolean;
@@ -261,12 +269,14 @@ begin
         -- current byte (TransferByteNum), if that's what was armed for this
         -- transaction. A no-op (no wait) otherwise, so it's safe to
         -- call after every bit.
-        procedure MaybeStretch(constant BitPos : integer) is
+        procedure MaybeStretch(constant BitPos : integer; constant AlreadyElapsed : time := 0 ns) is
         begin
             if StretchArmed and StretchByteNum = TransferByteNum and StretchBitPos = BitPos then
                 StretchArmed := false;  -- consumed
                 SCL <= '0';
-                wait for StretchDelayCopy;
+                if StretchDelayCopy > AlreadyElapsed then
+                    wait for StretchDelayCopy - AlreadyElapsed;
+                end if;
                 SCL <= 'Z';
                 Log(ModelID, "Clock stretch: held SCL low for " &
                     to_string(StretchDelayCopy, 1 ns) & " after byte " &
@@ -307,8 +317,16 @@ begin
                 MaybeStretch(7 - BitIdx);
             end loop;
 
-            Addressed := (AddrByte(7 downto 1) = TARGET_ADDRESS);
-            IsRead    := (AddrByte(0) = '1');
+            -- 10-bit addressing: this first byte is always the "11110" + Addr(9:8)
+            -- + R/W prefix. For a write, R/W=0 and a second (8-bit) address byte
+            -- follows. For a read, this is the third byte.
+            if TEN_BIT_ADDR then
+                Addressed := (AddrByte(7 downto 3) = "11110")
+                         and (AddrByte(2 downto 1) = TARGET_ADDRESS(9 downto 8));
+            else
+                Addressed := (AddrByte(7 downto 1) = TARGET_ADDRESS(6 downto 0));
+            end if;
+            IsRead := (AddrByte(0) = '1');
 
             if NackInjectRequestCount /= SeenNackRequests then
                 SeenNackRequests  := NackInjectRequestCount;
@@ -323,14 +341,37 @@ begin
             end if;
             wait until rising_edge(SCL);
             wait until falling_edge(SCL);
-            MaybeStretch(8);  -- after the address byte's ACK/NACK bit
             wait for tSdaChangeDelay;
             SDA <= 'Z';
+            MaybeStretch(8, AlreadyElapsed => tSdaChangeDelay);  -- after the address byte's ACK/NACK bit
 
             if AddressNacked then
                 NackArmed := false;  -- consumed
                 Log(ModelID, "Address NACK injected: " &
                     to_hxstring(AddrByte(7 downto 1)), INFO);
+            end if;
+
+            -- 10-bit addressing: a write direction setup (R/W=0 on
+            -- that first byte) still needs its second 8-bit address
+            -- byte. A read-direction byte (after Sr) has no second byte,
+            -- so data starts immediately, same as 7-bit mode.
+            if Addressed and not AddressNacked and TEN_BIT_ADDR and not IsRead then
+                for BitIdx in 7 downto 0 loop
+                    wait until rising_edge(SCL);
+                    Addr2(BitIdx) := to_x01(SDA);
+                    wait until falling_edge(SCL);
+                end loop;
+
+                Addressed := (Addr2 = TARGET_ADDRESS(7 downto 0));
+
+                if Addressed then
+                    wait for tSdaChangeDelay;
+                    SDA <= '0';
+                end if;
+                wait until rising_edge(SCL);
+                wait until falling_edge(SCL);
+                wait for tSdaChangeDelay;
+                SDA <= 'Z';
             end if;
 
             if Addressed and not AddressNacked then
@@ -348,8 +389,8 @@ begin
                             SDA <= '0' when DataByte(BitIdx) = '0' else 'Z';
                             wait until rising_edge(SCL);
                             wait until falling_edge(SCL);
-                            MaybeStretch(7 - BitIdx);
                             wait for tSdaChangeDelay;
+                            MaybeStretch(7 - BitIdx, AlreadyElapsed => tSdaChangeDelay);
                         end loop;
                         SDA <= 'Z';  -- release for the controller's ACK/NACK
 
@@ -403,9 +444,9 @@ begin
                         end if;
                         wait until rising_edge(SCL);
                         wait until falling_edge(SCL);
-                        MaybeStretch(8);
                         wait for tSdaChangeDelay;
                         SDA <= 'Z';
+                        MaybeStretch(8, AlreadyElapsed => tSdaChangeDelay);
                         TransferByteNum := TransferByteNum + 1;
 
                         if DataNacked then

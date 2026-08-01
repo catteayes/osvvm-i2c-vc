@@ -11,6 +11,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.2        10-bit addressing (#15)
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,7 +49,8 @@ package I2cComponentPkg is
     component I2cPeripheral is
         generic(
             MODEL_ID_NAME  : string := "";
-            TARGET_ADDRESS : std_logic_vector(6 downto 0) := "1010000";
+            TARGET_ADDRESS : std_logic_vector(9 downto 0) := "0001010000";  -- 0x50 (7-bit)
+            TEN_BIT_ADDR   : boolean := false;
             SCL_PERIOD     : time   := I2C_SCL_PERIOD_400K
         );
         port(

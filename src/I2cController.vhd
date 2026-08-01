@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.10       10-bit addressing (#15)
 --    07/2026   0.9        Failed NACK injection alert
 --    07/2026   0.8        SetSclPeriod and SetTimeout (#13)
 --    07/2026   0.7        NACK injection (#12)
@@ -225,6 +226,64 @@ architecture model of I2cController is
         SCL <= '0';
     end procedure I2cReceiveByte;
 
+    -- Send the address phase of a transfer: 7-bit (one byte, Addr(6 downto 0)
+    -- & R/W) or 10-bit. A 10-bit read always starts as a write-direction setup
+    -- (2 bytes: "11110" + Addr(9:8) + W, then Addr(7:0)), then issues its own
+    -- repeated START and resends the first byte with R/W=1 to switch direction.
+    procedure I2cSendAddress(
+        signal   SCL, SDA  : inout std_logic;
+        constant Addr      : in  std_logic_vector(9 downto 0);
+        constant AddrWidth : in  integer;
+        constant IsRead    : in  boolean;
+        variable Acked     : out boolean
+    ) is
+        variable AddrByte : std_logic_vector(7 downto 0);
+    begin
+        if AddrWidth > 7 then
+            -- Byte 1: 11110 + Addr(9:8) + W - always write-direction first.
+            AddrByte := "11110" & Addr(9 downto 8) & '0';
+            I2cSendByte(SCL, SDA, AddrByte, Acked);
+            AlertIfNot(ModelID, Acked,
+                "No ACK received for 10-bit address byte 1 " & to_hxstring(AddrByte),
+                ERROR
+            );
+            Log(ModelID, "10-bit address byte 1 " & to_hxstring(AddrByte) &
+                "  ACK=" & to_string(Acked), DEBUG);
+
+            if Acked then
+                AddrByte := Addr(7 downto 0);
+                I2cSendByte(SCL, SDA, AddrByte, Acked);
+                AlertIfNot(ModelID, Acked,
+                    "No ACK received for 10-bit address byte 2 " & to_hxstring(AddrByte),
+                    ERROR
+                );
+                Log(ModelID, "10-bit address byte 2 " & to_hxstring(AddrByte) &
+                    "  ACK=" & to_string(Acked), DEBUG);
+            end if;
+
+            if Acked and IsRead then
+                I2cRepeatedStart(SCL, SDA);
+                AddrByte := "11110" & Addr(9 downto 8) & '1';
+                I2cSendByte(SCL, SDA, AddrByte, Acked);
+                AlertIfNot(ModelID, Acked,
+                    "No ACK received for 10-bit address byte 3 (read direction) " & to_hxstring(AddrByte),
+                    ERROR
+                );
+                Log(ModelID, "10-bit address byte 3 (read direction) " & to_hxstring(AddrByte) &
+                    "  ACK=" & to_string(Acked), DEBUG);
+            end if;
+        else
+            AddrByte := Addr(6 downto 0) & '1' when IsRead else Addr(6 downto 0) & '0';
+            I2cSendByte(SCL, SDA, AddrByte, Acked);
+            AlertIfNot(ModelID, Acked,
+                "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
+                ERROR
+            );
+            Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
+                "  ACK=" & to_string(Acked), DEBUG);
+        end if;
+    end procedure I2cSendAddress;
+
 begin
 
     -- Internal record-dispatch reference clock
@@ -250,7 +309,7 @@ begin
     ----------------------------------------------------------------------------
     TransactionDispatcher : process
         alias Operation   : AddressBusOperationType is TransRec.Operation;
-        variable AddrByte : std_logic_vector(7 downto 0);
+        variable Addr10   : std_logic_vector(9 downto 0);  -- 7-bit or 10-bit
         variable WData    : std_logic_vector(7 downto 0);
         variable RData    : std_logic_vector(7 downto 0);
         variable Acked    : boolean;
@@ -283,9 +342,9 @@ begin
 
             case Operation is
                 when WRITE_OP =>
-                    -- 7-bit addressing only; R/W bit '0' = write
-                    AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '0';
-                    WData    := SafeResize(ModelID, TransRec.DataToModel, 8);
+                    -- 7-bit or 10-bit
+                    Addr10 := SafeResize(ModelID, TransRec.Address, 10);
+                    WData  := SafeResize(ModelID, TransRec.DataToModel, 8);
 
                     if BusHeldBySr then
                         BusHeldBySr := false;
@@ -293,14 +352,7 @@ begin
                         I2cStart(SCL, SDA);
                     end if;
 
-                    -- Send address byte
-                    I2cSendByte(SCL, SDA, AddrByte, Acked);
-                    AlertIfNot(ModelID, Acked,
-                        "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
-                        ERROR
-                    );
-                    Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
-                        "  ACK=" & to_string(Acked), DEBUG);
+                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => false, Acked => Acked);
 
                     if Acked then
                         I2cSendByte(SCL, SDA, WData, Acked);
@@ -326,7 +378,7 @@ begin
                     end if;
 
                     Log(ModelID,
-                        "Write Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
+                        "Write Operation, Address: " & to_hxstring(Addr10) &
                         "  Data: " & to_hxstring(WData) &
                         "  Operation# " & to_string(TransRec.Rdy),
                         INFO,
@@ -334,9 +386,9 @@ begin
                     );
 
                 when WRITE_BURST =>
-                    -- 7-bit addressing only; R/W bit '0' = write. One address phase
-                    -- followed by NumBurstBytes.
-                    AddrByte      := SafeResize(ModelID, TransRec.Address, 7) & '0';
+                    -- 7-bit or 10-bit
+                    -- One address phase followed by NumBurstBytes.
+                    Addr10        := SafeResize(ModelID, TransRec.Address, 10);
                     NumBurstBytes := TransRec.DataWidth;
 
                     if BusHeldBySr then
@@ -345,14 +397,7 @@ begin
                         I2cStart(SCL, SDA);
                     end if;
 
-                    -- Send address byte
-                    I2cSendByte(SCL, SDA, AddrByte, Acked);
-                    AlertIfNot(ModelID, Acked,
-                        "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
-                        ERROR
-                    );
-                    Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
-                        "  ACK=" & to_string(Acked), DEBUG);
+                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => false, Acked => Acked);
 
                     if Acked then
                         for ByteIdx in 1 to NumBurstBytes loop
@@ -390,7 +435,7 @@ begin
                     end if;
 
                     Log(ModelID,
-                        "Write Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
+                        "Write Burst Operation, Address: " & to_hxstring(Addr10) &
                         "  Length: " & to_string(NumBurstBytes) &
                         "  Operation# " & to_string(TransRec.Rdy),
                         INFO,
@@ -398,8 +443,8 @@ begin
                     );
 
                 when READ_OP =>
-                    -- 7-bit addressing only; R/W bit '1' = read
-                    AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '1';
+                    -- 7-bit or 10-bit
+                    Addr10 := SafeResize(ModelID, TransRec.Address, 10);
 
                     if BusHeldBySr then
                         BusHeldBySr := false;
@@ -407,14 +452,7 @@ begin
                         I2cStart(SCL, SDA);
                     end if;
 
-                    -- Send address byte
-                    I2cSendByte(SCL, SDA, AddrByte, Acked);
-                    AlertIfNot(ModelID, Acked,
-                        "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
-                        ERROR
-                    );
-                    Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
-                        "  ACK=" & to_string(Acked), DEBUG);
+                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => true, Acked => Acked);
 
                     if Acked then
                         -- This byte is the last one: NACK it to stop.
@@ -441,7 +479,7 @@ begin
                     TransRec.DataFromModel <= SafeResize(ModelID, RData, TransRec.DataFromModel'length);
 
                     Log(ModelID,
-                        "Read Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
+                        "Read Operation, Address: " & to_hxstring(Addr10) &
                         "  Data: " & to_hxstring(RData) &
                         "  Operation# " & to_string(TransRec.Rdy),
                         INFO,
@@ -449,8 +487,8 @@ begin
                     );
 
                 when READ_BURST =>
-                    -- 7-bit addressing only; R/W bit '1' = read
-                    AddrByte := SafeResize(ModelID, TransRec.Address, 7) & '1';
+                    -- 7-bit or 10-bit addressing
+                    Addr10        := SafeResize(ModelID, TransRec.Address, 10);
                     NumBurstBytes := TransRec.DataWidth;
 
                     if BusHeldBySr then
@@ -459,14 +497,7 @@ begin
                         I2cStart(SCL, SDA);
                     end if;
 
-                    -- Send address byte
-                    I2cSendByte(SCL, SDA, AddrByte, Acked);
-                    AlertIfNot(ModelID, Acked,
-                        "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
-                        ERROR
-                    );
-                    Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
-                        "  ACK=" & to_string(Acked), DEBUG);
+                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => true, Acked => Acked);
 
                     if Acked then
                         for ByteIdx in 1 to NumBurstBytes loop
@@ -518,7 +549,7 @@ begin
                     end if;
 
                     Log(ModelID,
-                        "Read Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
+                        "Read Burst Operation, Address: " & to_hxstring(Addr10) &
                         "  Length: " & to_string(NumBurstBytes) &
                         "  Operation# " & to_string(TransRec.Rdy),
                         INFO,
