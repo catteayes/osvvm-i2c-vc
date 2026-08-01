@@ -12,6 +12,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.5        SetClockStretch (#14)
 --    07/2026   0.4        SetSclPeriod / SetTimeout (#13)
 --    07/2026   0.3        SetNackInjectAddress / SetNackInjectDataByte (#12)
 --    07/2026   0.2        I2cOptionType / SetRepeatedStart (#11)
@@ -77,7 +78,9 @@ package I2cTbPkg is
         SET_REPEATED_START,
         SET_NACK_INJECT,
         SET_SCL_PERIOD,
-        SET_TIMEOUT
+        SET_TIMEOUT,
+        SET_CLOCK_STRETCH_DELAY,
+        SET_CLOCK_STRETCH_INDEX
     );
 
     ----------------------------------------------------------------------------
@@ -97,7 +100,6 @@ package I2cTbPkg is
     procedure SetNackInjectAddress(
         signal TransactionRec : inout I2cRecType
     );
-
     procedure SetNackInjectDataByte(
         signal   TransactionRec : inout I2cRecType;
         constant ByteIndex      : natural
@@ -115,6 +117,17 @@ package I2cTbPkg is
     procedure SetTimeout(
         signal   TransactionRec : inout I2cRecType;
         constant Value          : time
+    );
+
+    -- Clock stretching: one-time-use, for the next transaction only,
+    -- hold SCL low for Delay after a specific bit of that transaction.
+    -- Index uses a byte position and a bit position: Index = ByteNum*9 + BitPos,
+    -- where ByteNum is 0-based (0 = address byte, 1/2... = the 1st/2nd data byte)
+    -- and BitPos is 0-7 for a data bit (MSB-first) or 8 for the ACK/NACK bit.
+    procedure SetClockStretch(
+        signal   TransactionRec : inout I2cRecType;
+        constant Delay          : time;
+        constant Index          : natural
     );
 
 end package I2cTbPkg;
@@ -169,5 +182,20 @@ package body I2cTbPkg is
                         I2cOptionType'pos(SET_TIMEOUT),
                         Value);
     end procedure SetTimeout;
+
+    procedure SetClockStretch(
+        signal   TransactionRec : inout I2cRecType;
+        constant Delay          : time;
+        constant Index          : natural
+    ) is
+    begin
+        -- Delay first, then Index, the VC only arms on the Index call.
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_CLOCK_STRETCH_DELAY),
+                        Delay);
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_CLOCK_STRETCH_INDEX),
+                        Index);
+    end procedure SetClockStretch;
 
 end package body I2cTbPkg;

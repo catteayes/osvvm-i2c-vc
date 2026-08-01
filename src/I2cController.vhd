@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.9        Failed NACK injection alert
 --    07/2026   0.8        SetSclPeriod and SetTimeout (#13)
 --    07/2026   0.7        NACK injection (#12)
 --    07/2026   0.5        Repeated START (Sr) (#11)
@@ -319,6 +320,11 @@ begin
                     end if;
                     RepeatedStartArmed := false;
 
+                    if NackInjectArmed then
+                        NackInjectArmed := false;
+                        Alert(ModelID, "Can't NACK inject on write (controller)", ERROR);
+                    end if;
+
                     Log(ModelID,
                         "Write Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
                         "  Data: " & to_hxstring(WData) &
@@ -378,6 +384,11 @@ begin
                     end if;
                     RepeatedStartArmed := false;
 
+                    if NackInjectArmed then
+                        NackInjectArmed := false;
+                        Alert(ModelID, "Can't NACK inject on (burst) write (controller)", ERROR);
+                    end if;
+
                     Log(ModelID,
                         "Write Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &
                         "  Length: " & to_string(NumBurstBytes) &
@@ -421,6 +432,11 @@ begin
                         I2cStop(SCL, SDA);
                     end if;
                     RepeatedStartArmed := false;
+
+                    if NackInjectArmed then
+                        NackInjectArmed := false;
+                        Alert(ModelID, "Can't NACK inject on (no burst) read (controller)", ERROR);
+                    end if;
 
                     TransRec.DataFromModel <= SafeResize(ModelID, RData, TransRec.DataFromModel'length);
 
@@ -493,6 +509,13 @@ begin
                         I2cStop(SCL, SDA);
                     end if;
                     RepeatedStartArmed := false;
+
+                    if NackInjectArmed then
+                        NackInjectArmed := false;
+                        Alert(ModelID, "NACK injection (index " & to_string(NackInjectByteIndex) &
+                            ") was armed but never applied during the last transaction (index out of range)",
+                            ERROR);
+                    end if;
 
                     Log(ModelID,
                         "Read Burst Operation, Address: " & to_hxstring(AddrByte(7 downto 1)) &

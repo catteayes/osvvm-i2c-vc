@@ -143,7 +143,7 @@ code:
 | Option | Type | Wrapper procedure | Applies to | Meaning |
 |---|---|---|---|---|
 | `SET_SCL_PERIOD` | `time` | `SetSclPeriod(TransRec, Period)` | `I2cController` only | Override the SCL clock period at runtime (Standard-mode/Fast-mode/Fast-mode Plus, or any other value) |
-| `SET_CLOCK_STRETCH_ENABLE` | `boolean` | `SetClockStretchEnable(TransRec, Value)` | Not implemented yet, take this option at face value | Enable/disable this VC clock stretching |
+| `SET_CLOCK_STRETCH_DELAY` / `SET_CLOCK_STRETCH_INDEX` | `time` / `integer` | `SetClockStretch(TransRec, Delay, Index)` | `I2cPeripheral` only | One-time-use: hold SCL low an extra `Delay` after bit `Index mod 9` of byte `Index / 9` (`0` = address byte, `1`/`2`/... = data byte; bit `0`-`7` = data MSB-first, `8` = ACK/NACK) of the next transaction. |
 | `SET_NACK_INJECT` | `integer` (`<0` = address, `>=0` = data byte index) | `SetNackInjectAddress(TransRec)` / `SetNackInjectDataByte(TransRec, Index)` | `I2cController` (read-data bytes) and `I2cPeripheral` (address / write-data bytes) | One-time-use: force a NACK on the address byte or a specific data byte on the next transaction. Implemented on whichever VC generates ACK/NACK for that byte (see NACK injection above) |
 | `SET_REPEATED_START` | `boolean` | `SetRepeatedStart(TransRec, Value)` | `I2cController` only | One-time-use: next `Write`/`Read` ends with Sr instead of STOP |
 | `SET_TIMEOUT` | `time` | `SetTimeout(TransRec, Value)` | `I2cController` only | The longest `I2cController` will wait for SCL to actually release/respond before it Alerts `FAILURE` ("stuck bus") instead of hanging the simulation forever |

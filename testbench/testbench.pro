@@ -22,3 +22,4 @@ RunTest TbI2c_WriteRead1.vhd
 RunTest TbI2c_Burst1.vhd
 RunTest TbI2c_RepeatedStart1.vhd
 RunTest TbI2c_Nack1.vhd
+RunTest TbI2c_ClockStretch1.vhd

@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.6        Clock stretching (#14) and failed NACK injection alert
 --    07/2026   0.5        NACK injection (#12)
 --    07/2026   0.4        Repeated START (Sr) (#11)
 --    07/2026   0.3        Multi-byte write/read (#10)
@@ -101,13 +102,19 @@ architecture model of I2cPeripheral is
     signal NackInjectByteIndex    : integer := -1;
     signal NackInjectRequestCount : integer := 0;
 
+    -- Clock stretch (#14), one-time-use for the next transaction only.
+    -- Index = ByteNum*9 + BitPos (ByteNum 0-based, 0 = address byte;
+    -- BitPos 0-7 = data bit MSB-first, 8 = ACK/NACK). Driven by
+    -- TransactionDispatcher, BusEngine only reads these. Delay is set
+    -- first, then Index (arming happens while setting Index).
+    signal ClockStretchDelay        : time    := 0 ns;
+    signal ClockStretchIndex        : integer := -1;
+    signal ClockStretchRequestCount : integer := 0;
+
 begin
 
     -- Internal record-dispatch reference clock
     I2cClk <= not I2cClk after SCL_PERIOD / 2;
-
-    -- This model never drives SCL (no clock stretching yet).
-    SCL <= 'Z';
 
     ----------------------------------------------------------------------------
     --  Initialize alerts and data structures
@@ -186,6 +193,17 @@ begin
                             Log(ModelID, "Set NACK Inject, ByteIndex = " &
                                 to_string(TransRec.IntToModel), INFO);
 
+                        when I2cOptionType'pos(SET_CLOCK_STRETCH_DELAY) =>
+                            ClockStretchDelay <= TransRec.TimeToModel;
+                            Log(ModelID, "Set Clock Stretch Delay = " &
+                                to_string(TransRec.TimeToModel, 1 ns), INFO);
+
+                        when I2cOptionType'pos(SET_CLOCK_STRETCH_INDEX) =>
+                            ClockStretchIndex        <= TransRec.IntToModel;
+                            ClockStretchRequestCount <= ClockStretchRequestCount + 1;
+                            Log(ModelID, "Set Clock Stretch Index = " &
+                                to_string(TransRec.IntToModel), INFO);
+
                         when others =>
                             Alert(ModelID, "Unimplemented Option: " &
                                 to_string(I2cOptionType'val(TransRec.Options)),
@@ -218,16 +236,47 @@ begin
         variable DataByte  : std_logic_vector(7 downto 0);
         variable Addressed : boolean;
         variable IsRead    : boolean;
-        variable ControllerAcked : boolean;
+
         variable SrDetected : boolean := false;
+
+        variable ControllerAcked : boolean;
         variable AddressNacked : boolean;
         variable DataNacked    : boolean;
         variable WriteByteIdx  : integer;  -- 0-based
         variable NackArmed         : boolean := false;
         variable NackByteIndexCopy : integer := -1;
         variable SeenNackRequests  : integer := 0;
+
+        variable StretchArmed        : boolean := false;
+        variable StretchIndexCopy    : integer := -1;
+        variable StretchDelayCopy    : time    := 0 ns;
+        variable StretchByteNum      : integer := -1;  -- Index / 9
+        variable StretchBitPos       : integer := -1;  -- Index mod 9
+        variable SeenStretchRequests : integer := 0;
+        -- Byte position for this transaction: 0 = address byte,
+        -- 1/2/3... = the 1st/2nd/3rd data byte.
+        variable TransferByteNum : integer := 0;
+
+        -- Holds SCL low an extra StretchDelayCopy right after BitPos of the
+        -- current byte (TransferByteNum), if that's what was armed for this
+        -- transaction. A no-op (no wait) otherwise, so it's safe to
+        -- call after every bit.
+        procedure MaybeStretch(constant BitPos : integer) is
+        begin
+            if StretchArmed and StretchByteNum = TransferByteNum and StretchBitPos = BitPos then
+                StretchArmed := false;  -- consumed
+                SCL <= '0';
+                wait for StretchDelayCopy;
+                SCL <= 'Z';
+                Log(ModelID, "Clock stretch: held SCL low for " &
+                    to_string(StretchDelayCopy, 1 ns) & " after byte " &
+                    to_string(TransferByteNum) & " bit " & to_string(BitPos),
+                    INFO);
+            end if;
+        end procedure MaybeStretch;
     begin
         SDA <= 'Z';
+        SCL <= 'Z';
 
         BusEngineLoop : loop
             -- START (or repeated START): SDA falls while SCL is high.
@@ -239,11 +288,23 @@ begin
                 wait until falling_edge(SDA) and SCL = 'H';
             end if;
 
+            TransferByteNum := 0;
+            if ClockStretchRequestCount /= SeenStretchRequests then
+                SeenStretchRequests := ClockStretchRequestCount;
+                StretchIndexCopy    := ClockStretchIndex;
+                StretchDelayCopy    := ClockStretchDelay;
+                StretchByteNum      := StretchIndexCopy / 9;
+                StretchBitPos       := StretchIndexCopy mod 9;
+                StretchArmed        := true;
+            end if;
+
             -- Address + R/W byte, MSB first, based on the controller's
             -- SCL rising edges.
             for BitIdx in 7 downto 0 loop
                 wait until rising_edge(SCL);
                 AddrByte(BitIdx) := to_x01(SDA);
+                wait until falling_edge(SCL);
+                MaybeStretch(7 - BitIdx);
             end loop;
 
             Addressed := (AddrByte(7 downto 1) = TARGET_ADDRESS);
@@ -256,13 +317,13 @@ begin
             end if;
             AddressNacked := Addressed and NackArmed and (NackByteIndexCopy = -1);
 
-            wait until falling_edge(SCL);
             if Addressed and not AddressNacked then
                 wait for tSdaChangeDelay;
                 SDA <= '0';
             end if;
             wait until rising_edge(SCL);
             wait until falling_edge(SCL);
+            MaybeStretch(8);  -- after the address byte's ACK/NACK bit
             wait for tSdaChangeDelay;
             SDA <= 'Z';
 
@@ -273,7 +334,8 @@ begin
             end if;
 
             if Addressed and not AddressNacked then
-                WriteByteIdx := 0;
+                WriteByteIdx     := 0;
+                TransferByteNum  := 1;  -- first data byte
                 if IsRead then
                     -- Sends bytes until controller NACKs
                     ReadLoop : loop
@@ -286,6 +348,7 @@ begin
                             SDA <= '0' when DataByte(BitIdx) = '0' else 'Z';
                             wait until rising_edge(SCL);
                             wait until falling_edge(SCL);
+                            MaybeStretch(7 - BitIdx);
                             wait for tSdaChangeDelay;
                         end loop;
                         SDA <= 'Z';  -- release for the controller's ACK/NACK
@@ -298,8 +361,10 @@ begin
                             DEBUG
                         );
                         wait until falling_edge(SCL);
+                        MaybeStretch(8);
 
                         Increment(TransmitDoneCount);
+                        TransferByteNum := TransferByteNum + 1;
 
                         exit ReadLoop when not ControllerAcked;
                     end loop ReadLoop;
@@ -316,10 +381,13 @@ begin
                             SrDetected := (to_x01(SDA) = '0');
                             exit WriteLoop;
                         end if;
+                        MaybeStretch(0);  -- after bit 7/MSB (confirmed not Sr/Stop)
 
                         for BitIdx in 6 downto 0 loop
                             wait until rising_edge(SCL);
                             DataByte(BitIdx) := to_x01(SDA);
+                            wait until falling_edge(SCL);
+                            MaybeStretch(7 - BitIdx);
                         end loop;
 
                         if NackInjectRequestCount /= SeenNackRequests then
@@ -329,15 +397,16 @@ begin
                         end if;
                         DataNacked := NackArmed and (NackByteIndexCopy = WriteByteIdx);
 
-                        wait until falling_edge(SCL);
                         wait for tSdaChangeDelay;
                         if not DataNacked then
                             SDA <= '0';  -- ACK the data byte
                         end if;
                         wait until rising_edge(SCL);
                         wait until falling_edge(SCL);
+                        MaybeStretch(8);
                         wait for tSdaChangeDelay;
                         SDA <= 'Z';
+                        TransferByteNum := TransferByteNum + 1;
 
                         if DataNacked then
                             NackArmed := false;  -- consumed
@@ -352,6 +421,18 @@ begin
                         WriteByteIdx := WriteByteIdx + 1;
                     end loop WriteLoop;
                 end if;
+            end if;
+
+            if NackArmed then
+                NackArmed := false;
+                Alert(ModelID, "NACK injection (index " & to_string(NackByteIndexCopy) &
+                    ") was armed but never applied during the last transaction", ERROR);
+            end if;
+
+            if StretchArmed then
+                StretchArmed := false;
+                Alert(ModelID, "Clock stretch (index " & to_string(StretchIndexCopy) &
+                    ") was armed but never applied during the last transaction", ERROR);
             end if;
         end loop BusEngineLoop;
     end process BusEngine;
