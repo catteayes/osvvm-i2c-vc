@@ -12,6 +12,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.6        SetArbitrationAutoRetry (#16)
 --    07/2026   0.5        SetClockStretch (#14)
 --    07/2026   0.4        SetSclPeriod / SetTimeout (#13)
 --    07/2026   0.3        SetNackInjectAddress / SetNackInjectDataByte (#12)
@@ -80,7 +81,8 @@ package I2cTbPkg is
         SET_SCL_PERIOD,
         SET_TIMEOUT,
         SET_CLOCK_STRETCH_DELAY,
-        SET_CLOCK_STRETCH_INDEX
+        SET_CLOCK_STRETCH_INDEX,
+        SET_ARB_RETRY
     );
 
     ----------------------------------------------------------------------------
@@ -128,6 +130,16 @@ package I2cTbPkg is
         signal   TransactionRec : inout I2cRecType;
         constant Delay          : time;
         constant Index          : natural
+    );
+
+    -- Multi-master arbitration (I2cController only): When a Write/Read/
+    -- WriteBurst/ReadBurst loses arbitration, the controller always
+    -- releases the bus and Alerts WARNING. With auto-retry disabled (the
+    -- default), it gives up. With auto-retry enabled, it waits for the
+    -- bus to go idle (STOP) and retries.
+    procedure SetArbitrationAutoRetry(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
     );
 
 end package I2cTbPkg;
@@ -197,5 +209,15 @@ package body I2cTbPkg is
                         I2cOptionType'pos(SET_CLOCK_STRETCH_INDEX),
                         Index);
     end procedure SetClockStretch;
+
+    procedure SetArbitrationAutoRetry(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_ARB_RETRY),
+                        Value);
+    end procedure SetArbitrationAutoRetry;
 
 end package body I2cTbPkg;

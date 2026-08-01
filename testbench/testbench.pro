@@ -24,3 +24,9 @@ RunTest TbI2c_RepeatedStart1.vhd
 RunTest TbI2c_Nack1.vhd
 RunTest TbI2c_ClockStretch1.vhd
 RunTest TbI2c_Addr10_1.vhd
+
+analyze TestCtrlArb_e.vhd
+analyze TbI2cArb.vhd
+
+RunTest TbI2c_Arbitration1.vhd
+RunTest TbI2c_ArbitrationBurst1.vhd

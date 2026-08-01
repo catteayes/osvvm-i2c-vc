@@ -16,6 +16,22 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    07/2026   0.12       WriteBurst/ReadBurst now auto-retry on
+--                         arbitration loss too, matching #16's original
+--                         scope: a retry is always a full restart of the
+--                         whole burst from byte 1 (real controllers never
+--                         "resume" a partial transfer), so the burst is
+--                         captured into a local array up front (write) or
+--                         committed to the real FIFO only once at the end
+--                         (read), rather than threading state through the
+--                         destructively-drained WriteBurstFifo/ReadBurstFifo
+--    07/2026   0.11       Multi-master arbitration (#16): I2cSendByte
+--                         detects arbitration loss (SDA read-back mismatch
+--                         while releasing high), releases both lines
+--                         immediately, and reports via Alert WARNING;
+--                         SetArbitrationAutoRetry re-attempts Write/Read
+--                         after the bus goes idle
+--    07/2026   0.10       10-bit addressing (#15)
 --    07/2026   0.10       10-bit addressing (#15)
 --    07/2026   0.9        Failed NACK injection alert
 --    07/2026   0.8        SetSclPeriod and SetTimeout (#13)
@@ -124,6 +140,12 @@ architecture model of I2cController is
         );
     end procedure WaitSclHigh;
 
+    procedure WaitForBusFree(signal SCL, SDA : in std_logic) is
+    begin
+        wait until rising_edge(SDA) and SCL = 'H';
+        wait for tSclLow;
+    end procedure WaitForBusFree;
+
     -- Open-drain only: every drive here is either '0' or 'Z'.
     -- Data (SDA) only changes while
     -- SCL is low and must be stable while SCL is high.
@@ -165,13 +187,16 @@ architecture model of I2cController is
     end procedure I2cRepeatedStart;
 
     -- Transmit one byte MSB-first, then release SDA on the 9th clock and
-    -- sample the receiver's ACK ('0') / NACK ('1').
+    -- sample the receiver's ACK ('0') / NACK ('1'). Also detects
+    -- arbitration loss.
     procedure I2cSendByte(
         signal   SCL, SDA : inout std_logic;
         constant Byte     : in  std_logic_vector(7 downto 0);
-        variable Acked    : out boolean
+        variable Acked    : out boolean;
+        variable ArbLost  : out boolean
     ) is
     begin
+        ArbLost := false;
         for BitIdx in 7 downto 0 loop
             -- Data changes only while SCL is low.
             wait for tSdaChangeDelay;
@@ -179,6 +204,15 @@ architecture model of I2cController is
             wait for tSclLow - tSdaChangeDelay;
             SCL <= 'Z';
             WaitSclHigh(SCL);
+
+            if Byte(BitIdx) = '1' and to_x01(SDA) = '0' then
+                ArbLost := true;
+                SDA <= 'Z';
+                SCL <= 'Z';
+                Acked := false;
+                return;
+            end if;
+
             wait for tSclHigh;
             SCL <= '0';
         end loop;
@@ -235,52 +269,62 @@ architecture model of I2cController is
         constant Addr      : in  std_logic_vector(9 downto 0);
         constant AddrWidth : in  integer;
         constant IsRead    : in  boolean;
-        variable Acked     : out boolean
+        variable Acked     : out boolean;
+        variable ArbLost   : out boolean
     ) is
         variable AddrByte : std_logic_vector(7 downto 0);
     begin
+        ArbLost := false;
         if AddrWidth > 7 then
             -- Byte 1: 11110 + Addr(9:8) + W - always write-direction first.
             AddrByte := "11110" & Addr(9 downto 8) & '0';
-            I2cSendByte(SCL, SDA, AddrByte, Acked);
-            AlertIfNot(ModelID, Acked,
-                "No ACK received for 10-bit address byte 1 " & to_hxstring(AddrByte),
-                ERROR
-            );
-            Log(ModelID, "10-bit address byte 1 " & to_hxstring(AddrByte) &
-                "  ACK=" & to_string(Acked), DEBUG);
-
-            if Acked then
-                AddrByte := Addr(7 downto 0);
-                I2cSendByte(SCL, SDA, AddrByte, Acked);
+            I2cSendByte(SCL, SDA, AddrByte, Acked, ArbLost);
+            if not ArbLost then
                 AlertIfNot(ModelID, Acked,
-                    "No ACK received for 10-bit address byte 2 " & to_hxstring(AddrByte),
+                    "No ACK received for 10-bit address byte 1 " & to_hxstring(AddrByte),
                     ERROR
                 );
-                Log(ModelID, "10-bit address byte 2 " & to_hxstring(AddrByte) &
+                Log(ModelID, "10-bit address byte 1 " & to_hxstring(AddrByte) &
                     "  ACK=" & to_string(Acked), DEBUG);
             end if;
 
-            if Acked and IsRead then
+            if Acked and not ArbLost then
+                AddrByte := Addr(7 downto 0);
+                I2cSendByte(SCL, SDA, AddrByte, Acked, ArbLost);
+                if not ArbLost then
+                    AlertIfNot(ModelID, Acked,
+                        "No ACK received for 10-bit address byte 2 " & to_hxstring(AddrByte),
+                        ERROR
+                    );
+                    Log(ModelID, "10-bit address byte 2 " & to_hxstring(AddrByte) &
+                        "  ACK=" & to_string(Acked), DEBUG);
+                end if;
+            end if;
+
+            if Acked and not ArbLost and IsRead then
                 I2cRepeatedStart(SCL, SDA);
                 AddrByte := "11110" & Addr(9 downto 8) & '1';
-                I2cSendByte(SCL, SDA, AddrByte, Acked);
-                AlertIfNot(ModelID, Acked,
-                    "No ACK received for 10-bit address byte 3 (read direction) " & to_hxstring(AddrByte),
-                    ERROR
-                );
-                Log(ModelID, "10-bit address byte 3 (read direction) " & to_hxstring(AddrByte) &
-                    "  ACK=" & to_string(Acked), DEBUG);
+                I2cSendByte(SCL, SDA, AddrByte, Acked, ArbLost);
+                if not ArbLost then
+                    AlertIfNot(ModelID, Acked,
+                        "No ACK received for 10-bit address byte 3 (read direction) " & to_hxstring(AddrByte),
+                        ERROR
+                    );
+                    Log(ModelID, "10-bit address byte 3 (read direction) " & to_hxstring(AddrByte) &
+                        "  ACK=" & to_string(Acked), DEBUG);
+                end if;
             end if;
         else
             AddrByte := Addr(6 downto 0) & '1' when IsRead else Addr(6 downto 0) & '0';
-            I2cSendByte(SCL, SDA, AddrByte, Acked);
-            AlertIfNot(ModelID, Acked,
-                "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
-                ERROR
-            );
-            Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
-                "  ACK=" & to_string(Acked), DEBUG);
+            I2cSendByte(SCL, SDA, AddrByte, Acked, ArbLost);
+            if not ArbLost then
+                AlertIfNot(ModelID, Acked,
+                    "No ACK received for address " & to_hxstring(AddrByte(7 downto 1)),
+                    ERROR
+                );
+                Log(ModelID, "Address byte " & to_hxstring(AddrByte) &
+                    "  ACK=" & to_string(Acked), DEBUG);
+            end if;
         end if;
     end procedure I2cSendAddress;
 
@@ -319,6 +363,153 @@ begin
         variable NackInjectArmed     : boolean := false;
         variable NackInjectByteIndex : integer := -1;
         variable NackDataArmed       : boolean;  -- if this byte matches NackInjectByteIndex
+        variable ArbRetryEnabled : boolean := false;
+        variable ArbLost         : boolean;
+
+        -- The whole message restarts from byte 0 for bursts. This is made
+        -- as a procedure to allow its own local BurstBytes array to be able
+        -- to be sized from the NumBurstBytes parameter. The burst is captured
+        -- from WriteBurstFifo at the start, so a retry can always restart clean
+        -- even though the FIFO itself only supports one destructive pass.
+        procedure I2cWriteBurstWithRetry(
+            signal   SCL, SDA      : inout std_logic;
+            constant Addr10        : in    std_logic_vector(9 downto 0);
+            constant AddrWidth     : in    integer;
+            constant NumBurstBytes : in    integer;
+            variable Acked         : out   boolean
+        ) is
+            type ByteArrayType is array (1 to NumBurstBytes) of std_logic_vector(7 downto 0);
+            variable BurstBytes : ByteArrayType;
+            variable ArbLost    : boolean;
+        begin
+            for i in 1 to NumBurstBytes loop
+                BurstBytes(i) := SafeResize(ModelID, Pop(TransRec.WriteBurstFifo), 8);
+            end loop;
+
+            ArbRetryLoop : loop
+                if BusHeldBySr then
+                    BusHeldBySr := false;
+                else
+                    I2cStart(SCL, SDA);
+                end if;
+
+                I2cSendAddress(SCL, SDA, Addr10, AddrWidth, IsRead => false,
+                    Acked => Acked, ArbLost => ArbLost);
+
+                if Acked and not ArbLost then
+                    for i in 1 to NumBurstBytes loop
+                        I2cSendByte(SCL, SDA, BurstBytes(i), Acked, ArbLost);
+                        if ArbLost then
+                            exit;
+                        end if;
+                        AlertIfNot(ModelID, Acked,
+                            "No ACK received for burst byte " & to_string(i) &
+                            "/" & to_string(NumBurstBytes) & " (" & to_hxstring(BurstBytes(i)) & ")",
+                            ERROR
+                        );
+                        Log(ModelID, "Write Burst byte " & to_string(i) & "/" & to_string(NumBurstBytes) &
+                            " " & to_hxstring(BurstBytes(i)) & "  ACK=" & to_string(Acked), DEBUG);
+
+                        exit when not Acked;
+                    end loop;
+                end if;
+
+                if ArbLost then
+                    Alert(ModelID, "Arbitration lost during WriteBurst", WARNING);
+                    if ArbRetryEnabled then
+                        WaitForBusFree(SCL, SDA);
+                        next ArbRetryLoop;
+                    end if;
+                else
+                    if RepeatedStartArmed and Acked then
+                        I2cRepeatedStart(SCL, SDA);
+                        BusHeldBySr := true;
+                    else
+                        I2cStop(SCL, SDA);
+                    end if;
+                    RepeatedStartArmed := false;
+                end if;
+                exit ArbRetryLoop;
+            end loop ArbRetryLoop;
+        end procedure I2cWriteBurstWithRetry;
+
+        -- Same as the write side. Bytes are only pushed to the real
+        -- ReadBurstFifo once, after the whole attempt is done.
+        procedure I2cReadBurstWithRetry(
+            signal   SCL, SDA      : inout std_logic;
+            constant Addr10        : in    std_logic_vector(9 downto 0);
+            constant AddrWidth     : in    integer;
+            constant NumBurstBytes : in    integer;
+            variable Acked         : out   boolean
+        ) is
+            type ByteArrayType is array (1 to NumBurstBytes) of std_logic_vector(7 downto 0);
+            variable ReadBytes     : ByteArrayType;
+            variable ArbLost       : boolean;
+            variable RData         : std_logic_vector(7 downto 0);
+            variable NackDataArmed : boolean;
+        begin
+            ArbRetryLoop : loop
+                if BusHeldBySr then
+                    BusHeldBySr := false;
+                else
+                    I2cStart(SCL, SDA);
+                end if;
+
+                I2cSendAddress(SCL, SDA, Addr10, AddrWidth, IsRead => true,
+                    Acked => Acked, ArbLost => ArbLost);
+
+                if Acked and not ArbLost then
+                    for i in 1 to NumBurstBytes loop
+                        -- NackInjectByteIndex is 0-based; i is 1-based.
+                        NackDataArmed := NackInjectArmed and (NackInjectByteIndex = i - 1);
+
+                        I2cReceiveByte(SCL, SDA, RData, IsLastByte => (i = NumBurstBytes) or NackDataArmed);
+                        Log(ModelID, "Read Burst byte " & to_string(i) & "/" & to_string(NumBurstBytes) &
+                            " " & to_hxstring(RData) &
+                            "  ACK=" & to_string(not ((i = NumBurstBytes) or NackDataArmed)), DEBUG);
+                        ReadBytes(i) := RData;
+
+                        if NackDataArmed then
+                            NackInjectArmed := false;  -- consumed
+                            Alert(ModelID, "Read data byte NACK injected (index " &
+                                to_string(i - 1) & "), ending read early", ERROR);
+                            for FillIdx in i + 1 to NumBurstBytes loop
+                                ReadBytes(FillIdx) := (others => '0');
+                            end loop;
+                            exit;
+                        end if;
+                    end loop;
+                else
+                    -- Fill placeholders
+                    for i in 1 to NumBurstBytes loop
+                        ReadBytes(i) := (others => '0');
+                    end loop;
+                end if;
+
+                if ArbLost then
+                    Alert(ModelID, "Arbitration lost during ReadBurst", WARNING);
+                    if ArbRetryEnabled then
+                        WaitForBusFree(SCL, SDA);
+                        next ArbRetryLoop;
+                    end if;
+                else
+                    if RepeatedStartArmed and Acked then
+                        I2cRepeatedStart(SCL, SDA);
+                        BusHeldBySr := true;
+                    else
+                        I2cStop(SCL, SDA);
+                    end if;
+                    RepeatedStartArmed := false;
+                end if;
+                exit ArbRetryLoop;
+            end loop ArbRetryLoop;
+
+            -- Push once, keeps ReadCheckBurstVector's Pop count satisfied even if there was
+            -- an arbitration loss or an early NACK.
+            for i in 1 to NumBurstBytes loop
+                Push(TransRec.ReadBurstFifo, ReadBytes(i));
+            end loop;
+        end procedure I2cReadBurstWithRetry;
     begin
         wait on ModelID;  -- wait until initialized
         TransRec.WriteBurstFifo <= NewID("WriteBurstFifo", ModelID, Search => PRIVATE_NAME);
@@ -346,31 +537,45 @@ begin
                     Addr10 := SafeResize(ModelID, TransRec.Address, 10);
                     WData  := SafeResize(ModelID, TransRec.DataToModel, 8);
 
-                    if BusHeldBySr then
-                        BusHeldBySr := false;
-                    else
-                        I2cStart(SCL, SDA);
-                    end if;
+                    WriteArbRetryLoop : loop
+                        if BusHeldBySr then
+                            BusHeldBySr := false;
+                        else
+                            I2cStart(SCL, SDA);
+                        end if;
 
-                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => false, Acked => Acked);
+                        I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => false,
+                            Acked => Acked, ArbLost => ArbLost);
 
-                    if Acked then
-                        I2cSendByte(SCL, SDA, WData, Acked);
-                        AlertIfNot(ModelID, Acked,
-                            "No ACK received for data " & to_hxstring(WData),
-                            ERROR
-                        );
-                        Log(ModelID, "Data byte " & to_hxstring(WData) &
-                            "  ACK=" & to_string(Acked), DEBUG);
-                    end if;
+                        if Acked and not ArbLost then
+                            I2cSendByte(SCL, SDA, WData, Acked, ArbLost);
+                            if not ArbLost then
+                                AlertIfNot(ModelID, Acked,
+                                    "No ACK received for data " & to_hxstring(WData),
+                                    ERROR
+                                );
+                                Log(ModelID, "Data byte " & to_hxstring(WData) &
+                                    "  ACK=" & to_string(Acked), DEBUG);
+                            end if;
+                        end if;
 
-                    if RepeatedStartArmed and Acked then
-                        I2cRepeatedStart(SCL, SDA);
-                        BusHeldBySr := true;
-                    else
-                        I2cStop(SCL, SDA);
-                    end if;
-                    RepeatedStartArmed := false;
+                        if ArbLost then
+                            Alert(ModelID, "Arbitration lost during Write", WARNING);
+                            if ArbRetryEnabled then
+                                WaitForBusFree(SCL, SDA);
+                                next WriteArbRetryLoop;
+                            end if;
+                        else
+                            if RepeatedStartArmed and Acked then
+                                I2cRepeatedStart(SCL, SDA);
+                                BusHeldBySr := true;
+                            else
+                                I2cStop(SCL, SDA);
+                            end if;
+                            RepeatedStartArmed := false;
+                        end if;
+                        exit WriteArbRetryLoop;
+                    end loop WriteArbRetryLoop;
 
                     if NackInjectArmed then
                         NackInjectArmed := false;
@@ -391,43 +596,7 @@ begin
                     Addr10        := SafeResize(ModelID, TransRec.Address, 10);
                     NumBurstBytes := TransRec.DataWidth;
 
-                    if BusHeldBySr then
-                        BusHeldBySr := false;
-                    else
-                        I2cStart(SCL, SDA);
-                    end if;
-
-                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => false, Acked => Acked);
-
-                    if Acked then
-                        for ByteIdx in 1 to NumBurstBytes loop
-                            WData := SafeResize(ModelID, Pop(TransRec.WriteBurstFifo), 8);
-
-                            I2cSendByte(SCL, SDA, WData, Acked);
-                            AlertIfNot(ModelID, Acked,
-                                "No ACK received for burst byte " & to_string(ByteIdx) &
-                                "/" & to_string(NumBurstBytes) & " (" & to_hxstring(WData) & ")",
-                                ERROR
-                            );
-                            Log(ModelID, "Write Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
-                                " " & to_hxstring(WData) & "  ACK=" & to_string(Acked), DEBUG);
-
-                            exit when not Acked;
-                        end loop;
-                    end if;
-
-                    -- Empty burst bytes left.
-                    while not IsEmpty(TransRec.WriteBurstFifo) loop
-                        WData := Pop(TransRec.WriteBurstFifo);
-                    end loop;
-
-                    if RepeatedStartArmed and Acked then
-                        I2cRepeatedStart(SCL, SDA);
-                        BusHeldBySr := true;
-                    else
-                        I2cStop(SCL, SDA);
-                    end if;
-                    RepeatedStartArmed := false;
+                    I2cWriteBurstWithRetry(SCL, SDA, Addr10, TransRec.AddrWidth, NumBurstBytes, Acked);
 
                     if NackInjectArmed then
                         NackInjectArmed := false;
@@ -446,30 +615,44 @@ begin
                     -- 7-bit or 10-bit
                     Addr10 := SafeResize(ModelID, TransRec.Address, 10);
 
-                    if BusHeldBySr then
-                        BusHeldBySr := false;
-                    else
-                        I2cStart(SCL, SDA);
-                    end if;
+                    ReadArbRetryLoop : loop
+                        if BusHeldBySr then
+                            BusHeldBySr := false;
+                        else
+                            I2cStart(SCL, SDA);
+                        end if;
 
-                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => true, Acked => Acked);
+                        I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => true,
+                            Acked => Acked, ArbLost => ArbLost);
 
-                    if Acked then
-                        -- This byte is the last one: NACK it to stop.
-                        I2cReceiveByte(SCL, SDA, RData, IsLastByte => true);
-                        Log(ModelID, "Data byte " & to_hxstring(RData) &
-                            "  NACK (end of read)", DEBUG);
-                    else
-                        RData := (others => '0');
-                    end if;
+                        if Acked and not ArbLost then
+                            -- This byte is the last one: NACK it to stop.
+                            I2cReceiveByte(SCL, SDA, RData, IsLastByte => true);
+                            Log(ModelID, "Data byte " & to_hxstring(RData) &
+                                "  NACK (end of read)", DEBUG);
+                        elsif not ArbLost then
+                            RData := (others => '0');
+                        end if;
 
-                    if RepeatedStartArmed and Acked then
-                        I2cRepeatedStart(SCL, SDA);
-                        BusHeldBySr := true;
-                    else
-                        I2cStop(SCL, SDA);
-                    end if;
-                    RepeatedStartArmed := false;
+                        if ArbLost then
+                            Alert(ModelID, "Arbitration lost during Read", WARNING);
+                            if ArbRetryEnabled then
+                                WaitForBusFree(SCL, SDA);
+                                next ReadArbRetryLoop;
+                            else
+                                RData := (others => '0');
+                            end if;
+                        else
+                            if RepeatedStartArmed and Acked then
+                                I2cRepeatedStart(SCL, SDA);
+                                BusHeldBySr := true;
+                            else
+                                I2cStop(SCL, SDA);
+                            end if;
+                            RepeatedStartArmed := false;
+                        end if;
+                        exit ReadArbRetryLoop;
+                    end loop ReadArbRetryLoop;
 
                     if NackInjectArmed then
                         NackInjectArmed := false;
@@ -491,55 +674,7 @@ begin
                     Addr10        := SafeResize(ModelID, TransRec.Address, 10);
                     NumBurstBytes := TransRec.DataWidth;
 
-                    if BusHeldBySr then
-                        BusHeldBySr := false;
-                    else
-                        I2cStart(SCL, SDA);
-                    end if;
-
-                    I2cSendAddress(SCL, SDA, Addr10, TransRec.AddrWidth, IsRead => true, Acked => Acked);
-
-                    if Acked then
-                        for ByteIdx in 1 to NumBurstBytes loop
-                            -- NackInjectByteIndex is 0-based; ByteIdx is 1-based.
-                            NackDataArmed := NackInjectArmed and (NackInjectByteIndex = ByteIdx - 1);
-
-                            I2cReceiveByte(SCL, SDA, RData, IsLastByte => (ByteIdx = NumBurstBytes) or NackDataArmed);
-                            Log(ModelID, "Read Burst byte " & to_string(ByteIdx) & "/" & to_string(NumBurstBytes) &
-                                " " & to_hxstring(RData) &
-                                "  ACK=" & to_string(not ((ByteIdx = NumBurstBytes) or NackDataArmed)), DEBUG);
-
-                            Push(TransRec.ReadBurstFifo, RData);
-
-                            if NackDataArmed then
-                                NackInjectArmed := false;  -- consumed
-                                Alert(ModelID, "Read data byte NACK injected (index " &
-                                    to_string(ByteIdx - 1) & "), ending read early", ERROR);
-                                -- The peraipheral's ReadLoop also exits on this
-                                -- NACK, so it isn't sending any more bytes,
-                                -- fill the rest with placeholders so
-                                -- ReadCheckBurstVector's Pop count matches.
-                                for FillIdx in ByteIdx + 1 to NumBurstBytes loop
-                                    Push(TransRec.ReadBurstFifo, std_logic_vector'(X"00"));
-                                end loop;
-                                exit;
-                            end if;
-                        end loop;
-                    else
-                        -- Push NumBurstBytes placeholders so
-                        -- ReadCheckBurstVector's Pop count doesn't underflow.
-                        for ByteIdx in 1 to NumBurstBytes loop
-                            Push(TransRec.ReadBurstFifo, std_logic_vector'(X"00"));
-                        end loop;
-                    end if;
-
-                    if RepeatedStartArmed and Acked then
-                        I2cRepeatedStart(SCL, SDA);
-                        BusHeldBySr := true;
-                    else
-                        I2cStop(SCL, SDA);
-                    end if;
-                    RepeatedStartArmed := false;
+                    I2cReadBurstWithRetry(SCL, SDA, Addr10, TransRec.AddrWidth, NumBurstBytes, Acked);
 
                     if NackInjectArmed then
                         NackInjectArmed := false;
@@ -578,6 +713,11 @@ begin
                             BusTimeout <= TransRec.TimeToModel;
                             Log(ModelID, "Set Bus Timeout = " &
                                 to_string(TransRec.TimeToModel, 1 ns), INFO);
+
+                        when I2cOptionType'pos(SET_ARB_RETRY) =>
+                            ArbRetryEnabled := TransRec.BoolToModel;
+                            Log(ModelID, "Set Arbitration Auto-Retry = " &
+                                to_string(TransRec.BoolToModel), INFO);
 
                         when others =>
                             Alert(ModelID, "Unimplemented Option: " &
