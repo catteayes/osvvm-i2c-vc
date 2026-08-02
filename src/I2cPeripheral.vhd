@@ -16,9 +16,9 @@
 --
 --  Revision History:
 --    Date      Version    Description
---    07/2026   0.7        10-bit addressing (#15) and bug fix for clock stretching
+--    08/2026   0.7        10-bit addressing (#15) and bug fix for clock stretching
 --                         after an ACK bit
---    07/2026   0.6        Clock stretching (#14) and failed NACK injection alert
+--    08/2026   0.6        Clock stretching (#14) and failed NACK injection alert
 --    07/2026   0.5        NACK injection (#12)
 --    07/2026   0.4        Repeated START (Sr) (#11)
 --    07/2026   0.3        Multi-byte write/read (#10)

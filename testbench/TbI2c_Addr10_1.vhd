@@ -11,7 +11,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
---    07/2026   0.1        Initial 10-bit addressing test (#15)
+--    08/2026   0.1        Initial 10-bit addressing test (#15)
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
 --  you may not use this file except in compliance with the License.

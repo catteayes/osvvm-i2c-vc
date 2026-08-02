@@ -16,24 +16,9 @@
 --
 --  Revision History:
 --    Date      Version    Description
---    07/2026   0.12       WriteBurst/ReadBurst now auto-retry on
---                         arbitration loss too, matching #16's original
---                         scope: a retry is always a full restart of the
---                         whole burst from byte 1 (real controllers never
---                         "resume" a partial transfer), so the burst is
---                         captured into a local array up front (write) or
---                         committed to the real FIFO only once at the end
---                         (read), rather than threading state through the
---                         destructively-drained WriteBurstFifo/ReadBurstFifo
---    07/2026   0.11       Multi-master arbitration (#16): I2cSendByte
---                         detects arbitration loss (SDA read-back mismatch
---                         while releasing high), releases both lines
---                         immediately, and reports via Alert WARNING;
---                         SetArbitrationAutoRetry re-attempts Write/Read
---                         after the bus goes idle
---    07/2026   0.10       10-bit addressing (#15)
---    07/2026   0.10       10-bit addressing (#15)
---    07/2026   0.9        Failed NACK injection alert
+--    08/2026   0.11       Multi-master arbitration (#16)
+--    08/2026   0.10       10-bit addressing (#15)
+--    08/2026   0.9        Failed NACK injection alert
 --    07/2026   0.8        SetSclPeriod and SetTimeout (#13)
 --    07/2026   0.7        NACK injection (#12)
 --    07/2026   0.5        Repeated START (Sr) (#11)

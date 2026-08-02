@@ -12,8 +12,8 @@
 --
 --  Revision History:
 --    Date      Version    Description
---    07/2026   0.6        SetArbitrationAutoRetry (#16)
---    07/2026   0.5        SetClockStretch (#14)
+--    08/2026   0.6        SetArbitrationAutoRetry (#16)
+--    08/2026   0.5        SetClockStretch (#14)
 --    07/2026   0.4        SetSclPeriod / SetTimeout (#13)
 --    07/2026   0.3        SetNackInjectAddress / SetNackInjectDataByte (#12)
 --    07/2026   0.2        I2cOptionType / SetRepeatedStart (#11)

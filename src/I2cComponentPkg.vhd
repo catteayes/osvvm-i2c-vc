@@ -11,7 +11,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
---    07/2026   0.2        10-bit addressing (#15)
+--    08/2026   0.2        10-bit addressing (#15)
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
