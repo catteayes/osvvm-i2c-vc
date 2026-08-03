@@ -1,0 +1,18 @@
+%%  27625 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A0  ACK=true
+%%  50125 ns    Log    DEBUG     in i2ccontroller_1,                      Write Burst byte 1/4 11  ACK=true
+%%  50325 ns    Log    PASSED    in Default,                              Peripheral received write burst address Received : 50
+%%  50325 ns    Log    PASSED    in Default,                              Peripheral received burst byte 0 Received : 11
+%%  72625 ns    Log    DEBUG     in i2ccontroller_1,                      Write Burst byte 2/4 22  ACK=true
+%%  72825 ns    Log    PASSED    in Default,                              Peripheral received burst byte 1 Received : 22
+%%  95125 ns    Log    DEBUG     in i2ccontroller_1,                      Write Burst byte 3/4 33  ACK=true
+%%  95325 ns    Log    PASSED    in Default,                              Peripheral received burst byte 2 Received : 33
+%% 117625 ns    Log    DEBUG     in i2ccontroller_1,                      Write Burst byte 4/4 44  ACK=true
+%% 117825 ns    Log    PASSED    in Default,                              Peripheral received burst byte 3 Received : 44
+%% 145375 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A1  ACK=true
+%% 166750 ns    Log    DEBUG     in i2cperipheral_1,                      Data byte 94  Controller ACK=true
+%% 167875 ns    Log    DEBUG     in i2ccontroller_1,                      Read Burst byte 1/2 94  ACK=true
+%% 167875 ns    Log    PASSED    in Default,                              Peripheral received read burst address Received : 50
+%% 189250 ns    Log    DEBUG     in i2cperipheral_1,                      Data byte 55  Controller ACK=false
+%% 190375 ns    Log    DEBUG     in i2ccontroller_1,                      Read Burst byte 2/2 55  ACK=false
+%% 194250 ns    Log    PASSED    in i2ccontroller_1: ReadBurstFifo,       Received: 94   Item Number: 1
+%% 194250 ns    Log    PASSED    in i2ccontroller_1: ReadBurstFifo,       Received: 55   Item Number: 2

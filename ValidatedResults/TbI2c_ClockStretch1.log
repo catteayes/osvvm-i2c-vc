@@ -1,0 +1,5 @@
+%%  27625 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A0  ACK=true
+%%  53750 ns    Log    DEBUG     in i2ccontroller_1,                      Data byte 34  ACK=true
+%%  53950 ns    Log    PASSED    in Default,                              Peripheral received write address Received : 50
+%%  53950 ns    Log    PASSED    in Default,                              Peripheral received data Received : 34
+%%  57625 ns    Log    PASSED    in Default,                              Write took at least the stretch delay (elapsed 53875 ns)
