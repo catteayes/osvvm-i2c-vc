@@ -30,3 +30,5 @@ analyze TbI2cArb.vhd
 
 RunTest TbI2c_Arbitration1.vhd
 RunTest TbI2c_ArbitrationBurst1.vhd
+
+RunTest TbI2c_Monitor1.vhd

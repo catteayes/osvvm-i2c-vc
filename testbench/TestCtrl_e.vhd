@@ -14,6 +14,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.2        Bus monitor ports
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +37,7 @@ library ieee;
 
 library osvvm;
     context osvvm.OsvvmContext;
+    use osvvm.ScoreboardPkg_slv.all;
 
 library osvvm_i2c;
     context osvvm_i2c.I2cContext;
@@ -45,6 +47,10 @@ entity TestCtrl is
         -- Record Interfaces
         I2cControllerRec : inout I2cRecType;
         I2cPeripheralRec : inout I2cRecType;
+        -- Bus monitor
+        MonitorModelID          : in AlertLogIDType;
+        MonitorScoreboardID     : in osvvm.ScoreboardPkg_slv.ScoreboardIDType;
+        MonitorTransactionCount : in integer;
         -- Global Signal Interface
         Clk              : in    std_logic;
         n_Reset          : in    std_logic

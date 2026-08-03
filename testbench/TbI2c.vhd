@@ -12,6 +12,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.2        Add passive I2cMonitor_1
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,10 +60,18 @@ architecture TestHarness of TbI2c is
     signal SCL : std_logic;
     signal SDA : std_logic;
 
+    -- Bus monitor
+    signal MonitorModelID          : AlertLogIDType;
+    signal MonitorScoreboardID     : osvvm.ScoreboardPkg_slv.ScoreboardIDType;
+    signal MonitorTransactionCount : integer;
+
     component TestCtrl
         port(
             I2cControllerRec : inout I2cRecType;
             I2cPeripheralRec : inout I2cRecType;
+            MonitorModelID          : in AlertLogIDType;
+            MonitorScoreboardID     : in osvvm.ScoreboardPkg_slv.ScoreboardIDType;
+            MonitorTransactionCount : in integer;
             Clk              : in    std_logic;
             n_Reset          : in    std_logic
         );
@@ -110,6 +119,16 @@ begin
             SDA      => SDA
         );
 
+    -- Passive bus monitor: observes SCL/SDA, doesnt drive.
+    I2cMonitor_1 : I2cMonitor
+        port map(
+            SCL                 => SCL,
+            SDA                 => SDA,
+            ModelID             => MonitorModelID,
+            MonitorScoreboardID => MonitorScoreboardID,
+            TransactionCount    => MonitorTransactionCount
+        );
+
     ------------------------------------------------------------
     -- Test Sequencer
     ------------------------------------------------------------
@@ -117,6 +136,9 @@ begin
         port map(
             I2cControllerRec => I2cControllerRec,
             I2cPeripheralRec => I2cPeripheralRec,
+            MonitorModelID          => MonitorModelID,
+            MonitorScoreboardID     => MonitorScoreboardID,
+            MonitorTransactionCount => MonitorTransactionCount,
             Clk              => Clk,
             n_Reset          => n_Reset
         );

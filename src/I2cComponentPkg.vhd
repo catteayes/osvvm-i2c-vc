@@ -11,6 +11,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.3        I2cMonitor component declaration (#17)
 --    08/2026   0.2        10-bit addressing (#15)
 --    07/2026   0.1        Initial skeleton
 --
@@ -29,6 +30,10 @@
 
 library ieee;
     use ieee.std_logic_1164.all;
+
+library osvvm;
+    context osvvm.OsvvmContext;
+    use osvvm.ScoreboardPkg_slv.all;
 
 use work.I2cTbPkg.all;
 
@@ -59,5 +64,18 @@ package I2cComponentPkg is
             SDA      : inout std_logic
         );
     end component I2cPeripheral;
+
+    component I2cMonitor is
+        generic(
+            MODEL_ID_NAME : string := ""
+        );
+        port(
+            SCL                 : in  std_logic;
+            SDA                 : in  std_logic;
+            ModelID             : out AlertLogIDType;
+            MonitorScoreboardID : out osvvm.ScoreboardPkg_slv.ScoreboardIDType;
+            TransactionCount    : out integer
+        );
+    end component I2cMonitor;
 
 end package I2cComponentPkg;

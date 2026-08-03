@@ -16,6 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.11       Fix WaitForClock using wrong delay
 --    08/2026   0.11       Multi-master arbitration (#16)
 --    08/2026   0.10       10-bit addressing (#15)
 --    08/2026   0.9        Failed NACK injection alert
@@ -316,7 +317,7 @@ architecture model of I2cController is
 begin
 
     -- Internal record-dispatch reference clock
-    I2cClk <= not I2cClk after SCL_PERIOD / 2;
+    I2cClk <= not I2cClk after SclPeriod / 2;
 
     -- Change tSclLow/tSclHigh whenever SetSclPeriod changes SclPeriod.
     tSclLow  <= (SclPeriod * 11) / 20;
@@ -505,12 +506,6 @@ begin
         SDA <= 'Z';
 
         TransactionDispatcherLoop : loop
-            -- Clockless: same fix as I2cPeripheral's dispatcher - the
-            -- clocked overload's internal Clk-alignment wait adds up to a
-            -- full I2cClk period of unrelated delay between the previous
-            -- transaction's own bus timing (e.g. I2cStop's tBUF) ending and
-            -- this transaction actually starting. I2cClk still drives
-            -- WAIT_FOR_CLOCK below, just not this pickup.
             WaitForTransaction(
                 Rdy => TransRec.Rdy,
                 Ack => TransRec.Ack
