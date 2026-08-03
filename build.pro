@@ -16,6 +16,7 @@
 library osvvm_i2c
 
 analyze ./src/I2cTbPkg.vhd
+analyze ./src/I2cCoveragePkg.vhd
 analyze ./src/I2cComponentPkg.vhd
 analyze ./src/I2cContext.vhd
 analyze ./src/I2cController.vhd
