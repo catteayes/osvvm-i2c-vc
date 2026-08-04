@@ -1,21 +1,20 @@
 --
---  File Name:         TestCtrl_e.vhd
---  Design Unit Name:  TestCtrl
+--  File Name:         TestCtrlArb_e.vhd
+--  Design Unit Name:  TestCtrlArb
 --
 --  Maintainer:        Mehmet Burak Aykenar    email: burak.aykenar@anadologic.com
 --  Contributor(s):
 --     <intern name>
 --
 --  Description:
---      Test sequencer entity for the I2C testbench.
---      Each test case is an architecture of this entity in its own file
---      (TbI2c_<TestName>.vhd), following the OSVVM test-per-architecture
---      pattern — see OsvvmLibraries/SPI_GuyEschemann/testbench.
+--      Test sequencer entity for multi-master arbitration testbench
+--      (#16): two independent I2cController instances trying for the
+--      same bus, with one I2cPeripheral.
 --
 --  Revision History:
 --    Date      Version    Description
 --    08/2026   0.2        Bus monitor ports
---    07/2026   0.1        Initial skeleton
+--    08/2026   0.1        Initial skeleton (#16)
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
 --  you may not use this file except in compliance with the License.
@@ -42,17 +41,18 @@ library osvvm;
 library osvvm_i2c;
     context osvvm_i2c.I2cContext;
 
-entity TestCtrl is
+entity TestCtrlArb is
     port(
         -- Record Interfaces
-        I2cControllerRec : inout I2cRecType;
-        I2cPeripheralRec : inout I2cRecType;
+        I2cController1Rec : inout I2cRecType;
+        I2cController2Rec : inout I2cRecType;
+        I2cPeripheralRec  : inout I2cRecType;
         -- Bus monitor
         MonitorModelID          : in AlertLogIDType;
         MonitorScoreboardID     : in osvvm.ScoreboardPkg_slv.ScoreboardIDType;
         MonitorTransactionCount : in integer;
         -- Global Signal Interface
-        Clk              : in    std_logic;
-        n_Reset          : in    std_logic
+        Clk               : in    std_logic;
+        n_Reset           : in    std_logic
     );
-end entity TestCtrl;
+end entity TestCtrlArb;

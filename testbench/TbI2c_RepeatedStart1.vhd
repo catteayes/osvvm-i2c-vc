@@ -1,21 +1,21 @@
 --
---  File Name:         TbI2c_WriteRead1.vhd
---  Design Unit Name:  architecture WriteRead1 of TestCtrl
+--  File Name:         TbI2c_RepeatedStart1.vhd
+--  Design Unit Name:  architecture RepeatedStart1 of TestCtrl
 --
 --  Maintainer:        Mehmet Burak Aykenar    email: burak.aykenar@anadologic.com
 --  Contributor(s):
 --     <intern name>
 --
 --  Description:
---      First test case: single-byte write then read to a 7-bit target
---      address. Self-checking via AffirmIfEqual on both the controller and
---      peripheral side.
+--      Repeated START test: the standard "write a register pointer, then
+--      read from it without releasing the bus" idiom. The Write is armed
+--      with SetRepeatedStart so it ends with Sr instead of STOP; the Read
+--      that follows is not rearmed, so it ends with a normal STOP.
 --
 --  Revision History:
 --    Date      Version    Description
---    08/2026   0.3        Functional coverage (#18)
---    07/2026   0.2        Write and read, self-checking (#9)
---    07/2026   0.1        Initial skeleton
+--    08/2026   0.2        Functional coverage (#18)
+--    07/2026   0.1        Initial repeated START write-then-read test (#11)
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
 --  you may not use this file except in compliance with the License.
@@ -30,9 +30,13 @@
 --  limitations under the License.
 --
 
-architecture WriteRead1 of TestCtrl is
+architecture RepeatedStart1 of TestCtrl is
 
     signal TestDone : integer_barrier := 1;
+
+    constant DEV_ADDR    : std_logic_vector(6 downto 0) := "1010000";
+    constant REG_POINTER : std_logic_vector(7 downto 0) := X"12";
+    constant REG_DATA    : std_logic_vector(7 downto 0) := X"7A";
 
     signal AddrCov  : CoverageIDType;
     signal XferCov  : CoverageIDType;
@@ -47,7 +51,7 @@ begin
     ------------------------------------------------------------
     ControlProc : process
     begin
-        SetTestName("TbI2c_WriteRead1");
+        SetTestName("TbI2c_RepeatedStart1");
         SetLogEnable(PASSED, TRUE);
         SetLogEnable(DEBUG, TRUE);
 
@@ -82,11 +86,11 @@ begin
         AddBins(SpeedCov, "Fast (400K)",     GenBin(2));
         AddBins(SpeedCov, "Fast+ (1M)",      GenBin(3));
 
-        -- Not merging in a previous run's saved databases here:
-        -- this is the first RunTest in testbench.pro, so it starts
-        -- each new RunAllTests.pro with a clean database. Every other
-        -- test's ControlProc still calls MergeCovDbIfExists normally,
-        -- filling the rest of the database in this one regression.
+        MergeCovDbIfExists(AddrCov,  ADDR_COV_DB_FILE);
+        MergeCovDbIfExists(XferCov,  XFER_COV_DB_FILE);
+        MergeCovDbIfExists(RwSrCov,  RWSR_COV_DB_FILE);
+        MergeCovDbIfExists(ErrorCov, ERROR_COV_DB_FILE);
+        MergeCovDbIfExists(SpeedCov, SPEED_COV_DB_FILE);
 
         wait until n_Reset = '1';
         ClearAlerts;
@@ -115,20 +119,23 @@ begin
         wait until n_Reset = '1';
         WaitForClock(I2cControllerRec, 2);
 
-        Write(I2cControllerRec, "1010000", X"65");
-        ICover(AddrCov, (0, I2cAddrRangeBucket("1010000", 7)));
-        ICover(XferCov, 1);
-        ICover(RwSrCov, (0, 0));
-        ICover(ErrorCov, I2cErrorKindType'pos(ERR_NONE));
-        ICover(SpeedCov, 2);
+        SetSclPeriod(I2cControllerRec, I2C_SCL_PERIOD_1M);  -- Fast-mode Plus, for SpeedCov
 
-        Read(I2cControllerRec, "1010000", RData);
-        AffirmIfEqual(RData, X"34", "Controller received read data");
-        ICover(AddrCov, (0, I2cAddrRangeBucket("1010000", 7)));
+        SetRepeatedStart(I2cControllerRec, TRUE);
+        Write(I2cControllerRec, DEV_ADDR, REG_POINTER);
+        ICover(AddrCov, (0, I2cAddrRangeBucket(DEV_ADDR, 7)));
+        ICover(XferCov, 1);
+        ICover(RwSrCov, (0, 1));
+        ICover(ErrorCov, I2cErrorKindType'pos(ERR_NONE));
+        ICover(SpeedCov, 3);
+
+        Read(I2cControllerRec, DEV_ADDR, RData);
+        AffirmIfEqual(RData, REG_DATA, "Controller received read data");
+        ICover(AddrCov, (0, I2cAddrRangeBucket(DEV_ADDR, 7)));
         ICover(XferCov, 1);
         ICover(RwSrCov, (1, 0));
         ICover(ErrorCov, I2cErrorKindType'pos(ERR_NONE));
-        ICover(SpeedCov, 2);
+        ICover(SpeedCov, 3);
 
         WaitForBarrier(TestDone);
         wait;
@@ -144,22 +151,22 @@ begin
         wait until n_Reset = '1';
 
         GetWrite(I2cPeripheralRec, RxAddr, RxData);
-        AffirmIfEqual(RxAddr, "1010000", "Peripheral received write address");
-        AffirmIfEqual(RxData, X"65", "Peripheral received data");
+        AffirmIfEqual(RxAddr, DEV_ADDR, "Peripheral received write address");
+        AffirmIfEqual(RxData, REG_POINTER, "Peripheral received register pointer");
 
-        SendRead(I2cPeripheralRec, RxAddr, X"34");
-        AffirmIfEqual(RxAddr, "1010000", "Peripheral received read address");
+        SendRead(I2cPeripheralRec, RxAddr, REG_DATA);
+        AffirmIfEqual(RxAddr, DEV_ADDR, "Peripheral received read address");
 
         WaitForBarrier(TestDone);
         wait;
     end process PeripheralProc;
 
-end architecture WriteRead1;
+end architecture RepeatedStart1;
 
-configuration TbI2c_WriteRead1 of TbI2c is
+configuration TbI2c_RepeatedStart1 of TbI2c is
     for TestHarness
         for TestCtrl_1 : TestCtrl
-            use entity work.TestCtrl(WriteRead1);
+            use entity work.TestCtrl(RepeatedStart1);
         end for;
     end for;
-end configuration TbI2c_WriteRead1;
+end configuration TbI2c_RepeatedStart1;

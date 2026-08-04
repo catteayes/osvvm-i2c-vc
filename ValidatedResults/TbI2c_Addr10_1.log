@@ -1,0 +1,12 @@
+%%  27625 ns    Log    DEBUG     in i2ccontroller_1,                      10-bit address byte 1 F6  ACK=true
+%%  50125 ns    Log    DEBUG     in i2ccontroller_1,                      10-bit address byte 2 C1  ACK=true
+%%  72625 ns    Log    DEBUG     in i2ccontroller_1,                      Data byte 65  ACK=true
+%%  72825 ns    Log    PASSED    in Default,                              Peripheral received write address Received : 3C1
+%%  72825 ns    Log    PASSED    in Default,                              Peripheral received data Received : 65
+%% 100375 ns    Log    DEBUG     in i2ccontroller_1,                      10-bit address byte 1 F6  ACK=true
+%% 122875 ns    Log    DEBUG     in i2ccontroller_1,                      10-bit address byte 2 C1  ACK=true
+%% 149250 ns    Log    DEBUG     in i2ccontroller_1,                      10-bit address byte 3 (read direction) F7  ACK=true
+%% 170625 ns    Log    DEBUG     in i2cperipheral_1,                      Data byte 34  Controller ACK=false
+%% 171750 ns    Log    DEBUG     in i2ccontroller_1,                      Data byte 34  NACK (end of read)
+%% 171750 ns    Log    PASSED    in Default,                              Peripheral received read address Received : 3C1
+%% 175625 ns    Log    PASSED    in Default,                              Controller received read data Received : 34

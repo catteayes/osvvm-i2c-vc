@@ -1,0 +1,22 @@
+%%  99250 ns    Alert  ERROR     in i2ccontroller_1,                      No ACK received for address 50
+%%  99250 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A0  ACK=false
+%% 114750 ns    Log    PASSED    in Default,                              Alert count after address-NACK write Received : 1
+%% 210250 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A0  ACK=true
+%% 300250 ns    Alert  ERROR     in i2ccontroller_1,                      No ACK received for data CD
+%% 300250 ns    Log    DEBUG     in i2ccontroller_1,                      Data byte CD  ACK=false
+%% 315750 ns    Log    PASSED    in Default,                              Alert count after data-NACK write Received : 2
+%% 411250 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A0  ACK=true
+%% 501250 ns    Log    DEBUG     in i2ccontroller_1,                      Data byte EF  ACK=true
+%% 501450 ns    Log    PASSED    in Default,                              Peripheral received write address Received : 50
+%% 501450 ns    Log    PASSED    in Default,                              Peripheral received write data Received : EF
+%% 516750 ns    Log    PASSED    in Default,                              Alert count unchanged after recovery write Received : 2
+%% 612250 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A1  ACK=true
+%% 697750 ns    Log    DEBUG     in i2cperipheral_1,                      Data byte 11  Controller ACK=true
+%% 702250 ns    Log    DEBUG     in i2ccontroller_1,                      Read Burst byte 1/3 11  ACK=true
+%% 702250 ns    Log    PASSED    in Default,                              Peripheral received read address (injected-NACK scenario) Received : 50
+%% 787750 ns    Log    DEBUG     in i2cperipheral_1,                      Data byte 22  Controller ACK=false
+%% 792250 ns    Log    DEBUG     in i2ccontroller_1,                      Read Burst byte 2/3 22  ACK=false
+%% 792250 ns    Alert  ERROR     in i2ccontroller_1,                      Read data byte NACK injected (index 1), ending read early
+%% 807750 ns    Log    PASSED    in Default,                              Read burst byte 0 before injected NACK Received : 11
+%% 807750 ns    Log    PASSED    in Default,                              Read burst byte 1 (injected NACK ends the read here) Received : 22
+%% 807750 ns    Log    PASSED    in Default,                              Alert count after controller-injected read NACK Received : 3

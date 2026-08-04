@@ -1,19 +1,19 @@
 --
---  File Name:         TbI2c.vhd
---  Design Unit Name:  TbI2c
+--  File Name:         TbI2cArb.vhd
+--  Design Unit Name:  TbI2cArb
 --
 --  Maintainer:        Mehmet Burak Aykenar    email: burak.aykenar@anadologic.com
 --  Contributor(s):
 --     <intern name>
 --
 --  Description:
---      Test harness: I2cController and I2cPeripheral connected over an
---      open-drain SCL/SDA bus with pull-ups, plus the TestCtrl sequencer.
+--      Test harness for multi-master arbitration (#16): two
+--      I2cController instances and one I2cPeripheral.
 --
 --  Revision History:
 --    Date      Version    Description
 --    08/2026   0.2        Add passive I2cMonitor_1
---    07/2026   0.1        Initial skeleton
+--    08/2026   0.1        Initial skeleton (#16)
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
 --  you may not use this file except in compliance with the License.
@@ -39,10 +39,10 @@ library osvvm;
 library osvvm_i2c;
     context osvvm_i2c.I2cContext;
 
-entity TbI2c is
-end entity TbI2c;
+entity TbI2cArb is
+end entity TbI2cArb;
 
-architecture TestHarness of TbI2c is
+architecture TestHarness of TbI2cArb is
 
     -- Test Bench Constants
     constant tperiod_Clk : time := 10 ns;
@@ -53,10 +53,11 @@ architecture TestHarness of TbI2c is
     signal n_Reset : std_logic;
 
     -- Testbench Control Records
-    signal I2cControllerRec : I2cRecType;
-    signal I2cPeripheralRec : I2cRecType;
+    signal I2cController1Rec : I2cRecType;
+    signal I2cController2Rec : I2cRecType;
+    signal I2cPeripheralRec  : I2cRecType;
 
-    -- I2C Bus
+    -- I2C Bus - shared by both controllers and the peripheral
     signal SCL : std_logic;
     signal SDA : std_logic;
 
@@ -65,15 +66,16 @@ architecture TestHarness of TbI2c is
     signal MonitorScoreboardID     : osvvm.ScoreboardPkg_slv.ScoreboardIDType;
     signal MonitorTransactionCount : integer;
 
-    component TestCtrl
+    component TestCtrlArb
         port(
-            I2cControllerRec : inout I2cRecType;
-            I2cPeripheralRec : inout I2cRecType;
+            I2cController1Rec : inout I2cRecType;
+            I2cController2Rec : inout I2cRecType;
+            I2cPeripheralRec  : inout I2cRecType;
             MonitorModelID          : in AlertLogIDType;
             MonitorScoreboardID     : in osvvm.ScoreboardPkg_slv.ScoreboardIDType;
             MonitorTransactionCount : in integer;
-            Clk              : in    std_logic;
-            n_Reset          : in    std_logic
+            Clk               : in    std_logic;
+            n_Reset           : in    std_logic
         );
     end component;
 
@@ -103,11 +105,19 @@ begin
     );
 
     ------------------------------------------------------------
-    -- I2C Verification Components
+    -- I2C Verification Components - two controllers, one target,
+    -- all three sharing the same SCL/SDA nets (#16).
     ------------------------------------------------------------
     I2cController_1 : I2cController
         port map(
-            TransRec => I2cControllerRec,
+            TransRec => I2cController1Rec,
+            SCL      => SCL,
+            SDA      => SDA
+        );
+
+    I2cController_2 : I2cController
+        port map(
+            TransRec => I2cController2Rec,
             SCL      => SCL,
             SDA      => SDA
         );
@@ -132,15 +142,16 @@ begin
     ------------------------------------------------------------
     -- Test Sequencer
     ------------------------------------------------------------
-    TestCtrl_1 : TestCtrl
+    TestCtrl_1 : TestCtrlArb
         port map(
-            I2cControllerRec => I2cControllerRec,
-            I2cPeripheralRec => I2cPeripheralRec,
+            I2cController1Rec => I2cController1Rec,
+            I2cController2Rec => I2cController2Rec,
+            I2cPeripheralRec  => I2cPeripheralRec,
             MonitorModelID          => MonitorModelID,
             MonitorScoreboardID     => MonitorScoreboardID,
             MonitorTransactionCount => MonitorTransactionCount,
-            Clk              => Clk,
-            n_Reset          => n_Reset
+            Clk               => Clk,
+            n_Reset           => n_Reset
         );
 
 end architecture TestHarness;

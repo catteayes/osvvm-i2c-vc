@@ -12,6 +12,11 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.6        SetArbitrationAutoRetry (#16)
+--    08/2026   0.5        SetClockStretch (#14)
+--    07/2026   0.4        SetSclPeriod / SetTimeout (#13)
+--    07/2026   0.3        SetNackInjectAddress / SetNackInjectDataByte (#12)
+--    07/2026   0.2        I2cOptionType / SetRepeatedStart (#11)
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,11 +67,157 @@ package I2cTbPkg is
     constant I2C_SCL_PERIOD_1M   : time := 1 us;     -- Fast-mode Plus
 
     ----------------------------------------------------------------------------
-    -- TODO(intern):
-    --   * VC option types (SCL period override, clock stretching enable, ...)
-    --     set via SetModelOptions / ModelParametersPkg
-    --   * Error injection types (force NACK, arbitration loss, ...)
-    --   * to_string / logging helpers as needed
+    -- I2C VC Options (SetModelOptions / GetModelOptions).
+    -- See docs/TransactionInterface.md
+    --   SET_REPEATED_START  - I2cController only
+    --   SET_NACK_INJECT     - I2cController (read-data bytes) and
+    --                         I2cPeripheral (address / write-data bytes)
+    --   SET_SCL_PERIOD      - I2cController only
+    --   SET_TIMEOUT         - I2cController only
     ----------------------------------------------------------------------------
+    type I2cOptionType is (
+        SET_REPEATED_START,
+        SET_NACK_INJECT,
+        SET_SCL_PERIOD,
+        SET_TIMEOUT,
+        SET_CLOCK_STRETCH_DELAY,
+        SET_CLOCK_STRETCH_INDEX,
+        SET_ARB_RETRY
+    );
+
+    ----------------------------------------------------------------------------
+    -- Setters
+    ----------------------------------------------------------------------------
+    -- One-time-use: makes the next Write/Read end with a repeated START
+    -- (Sr) instead of STOP (P) (for a "write a register pointer, then read
+    -- from it without releasing the bus" idiom, for instance). Consumed by
+    -- the VC after one transfer and back to STOP.
+    procedure SetRepeatedStart(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
+    );
+
+    -- NACK injection: force a NACK on either the address byte or
+    -- a data byte (by 0 based index) of the next transfer, one-time-use.
+    procedure SetNackInjectAddress(
+        signal TransactionRec : inout I2cRecType
+    );
+    procedure SetNackInjectDataByte(
+        signal   TransactionRec : inout I2cRecType;
+        constant ByteIndex      : natural
+    );
+
+    procedure SetSclPeriod(
+        signal   TransactionRec : inout I2cRecType;
+        constant Period         : time
+    );
+
+    -- Bus timeout (I2cController only): the longest the controller will
+    -- wait for SCL to actually respond (release high) during START/STOP/Sr,
+    -- byte transmit or ACK/NACK sampling, before Alerting FAILURE instead
+    -- of hanging the simulation forever on a stuck bus.
+    procedure SetTimeout(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : time
+    );
+
+    -- Clock stretching: one-time-use, for the next transaction only,
+    -- hold SCL low for Delay after a specific bit of that transaction.
+    -- Index uses a byte position and a bit position: Index = ByteNum*9 + BitPos,
+    -- where ByteNum is 0-based (0 = address byte, 1/2... = the 1st/2nd data byte)
+    -- and BitPos is 0-7 for a data bit (MSB-first) or 8 for the ACK/NACK bit.
+    procedure SetClockStretch(
+        signal   TransactionRec : inout I2cRecType;
+        constant Delay          : time;
+        constant Index          : natural
+    );
+
+    -- Multi-master arbitration (I2cController only): When a Write/Read/
+    -- WriteBurst/ReadBurst loses arbitration, the controller always
+    -- releases the bus and Alerts WARNING. With auto-retry disabled (the
+    -- default), it gives up. With auto-retry enabled, it waits for the
+    -- bus to go idle (STOP) and retries.
+    procedure SetArbitrationAutoRetry(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
+    );
 
 end package I2cTbPkg;
+
+package body I2cTbPkg is
+
+    procedure SetRepeatedStart(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_REPEATED_START),
+                        Value);
+    end procedure SetRepeatedStart;
+
+    procedure SetNackInjectAddress(
+        signal TransactionRec : inout I2cRecType
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_NACK_INJECT),
+                        -1);
+    end procedure SetNackInjectAddress;
+
+    procedure SetNackInjectDataByte(
+        signal   TransactionRec : inout I2cRecType;
+        constant ByteIndex      : natural
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_NACK_INJECT),
+                        ByteIndex);
+    end procedure SetNackInjectDataByte;
+
+    procedure SetSclPeriod(
+        signal   TransactionRec : inout I2cRecType;
+        constant Period         : time
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_SCL_PERIOD),
+                        Period);
+    end procedure SetSclPeriod;
+
+    procedure SetTimeout(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : time
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_TIMEOUT),
+                        Value);
+    end procedure SetTimeout;
+
+    procedure SetClockStretch(
+        signal   TransactionRec : inout I2cRecType;
+        constant Delay          : time;
+        constant Index          : natural
+    ) is
+    begin
+        -- Delay first, then Index, the VC only arms on the Index call.
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_CLOCK_STRETCH_DELAY),
+                        Delay);
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_CLOCK_STRETCH_INDEX),
+                        Index);
+    end procedure SetClockStretch;
+
+    procedure SetArbitrationAutoRetry(
+        signal   TransactionRec : inout I2cRecType;
+        constant Value          : boolean
+    ) is
+    begin
+        SetModelOptions(TransactionRec,
+                        I2cOptionType'pos(SET_ARB_RETRY),
+                        Value);
+    end procedure SetArbitrationAutoRetry;
+
+end package body I2cTbPkg;

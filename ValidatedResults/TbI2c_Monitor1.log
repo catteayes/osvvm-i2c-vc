@@ -1,0 +1,8 @@
+%%  25125 ns    Log    PASSED    in i2cmonitor_1: I2cMonitorScoreboard,   Received: A0   Item Number: 1
+%%  27625 ns    Log    DEBUG     in i2ccontroller_1,                      Address byte A0  ACK=true
+%%  47625 ns    Log    PASSED    in i2cmonitor_1: I2cMonitorScoreboard,   Received: 65   Item Number: 2
+%%  50125 ns    Log    DEBUG     in i2ccontroller_1,                      Data byte 65  ACK=true
+%%  50325 ns    Log    PASSED    in Default,                              Peripheral received write address Received : 50
+%%  50325 ns    Log    PASSED    in Default,                              Peripheral received data Received : 65
+%%  54001 ns    Log    PASSED    in Default,                              Monitor should have observed exactly one transaction Received : 1
+%%  54001 ns    Log    PASSED    in Default,                              Monitor's scoreboard's mismatch count Received : 0

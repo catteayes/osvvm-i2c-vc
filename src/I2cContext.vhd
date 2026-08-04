@@ -11,6 +11,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.2        Add I2cCoveragePkg (#18)
 --    07/2026   0.1        Initial skeleton
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,4 +34,5 @@ context I2cContext is
     library osvvm_i2c;
         use osvvm_i2c.I2cTbPkg.all;
         use osvvm_i2c.I2cComponentPkg.all;
+        use osvvm_i2c.I2cCoveragePkg.all;
 end context I2cContext;
