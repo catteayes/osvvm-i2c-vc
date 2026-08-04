@@ -16,7 +16,7 @@
 --
 --  Revision History:
 --    Date      Version    Description
---    08/2026   0.11       Fix WaitForClock using wrong delay
+--    08/2026   0.12       Fix WaitForClock using wrong delay
 --    08/2026   0.11       Multi-master arbitration (#16)
 --    08/2026   0.10       10-bit addressing (#15)
 --    08/2026   0.9        Failed NACK injection alert
