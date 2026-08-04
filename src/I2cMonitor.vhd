@@ -22,6 +22,8 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.2        Fix NACK'ing at the first address byte for 10-bit
+--                         addressing
 --    08/2026   0.1        Initial bus monitor VC (#17)
 --
 --  Licensed under the Apache License, Version 2.0 (the "License");
@@ -187,7 +189,7 @@ begin
             CheckAckBit(AckValue);
 
             -- 10-bit addressing
-            if AddrByte(7 downto 3) = "11110" and AddrByte(0) = '0' then
+            if AddrByte(7 downto 3) = "11110" and AddrByte(0) = '0' and AckValue = '0' then
                 for BitIdx in 7 downto 0 loop
                     SampleBit(AddrByte, BitIdx);
                 end loop;

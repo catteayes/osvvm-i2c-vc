@@ -16,6 +16,8 @@
 --
 --  Revision History:
 --    Date      Version    Description
+--    08/2026   0.8        Fix NACK/clock-stretch armed for a 10-bit read's
+--                         data phase not working
 --    08/2026   0.7        10-bit addressing (#15) and bug fix for clock stretching
 --                         after an ACK bit
 --    08/2026   0.6        Clock stretching (#14) and failed NACK injection alert
@@ -265,6 +267,8 @@ begin
         -- 1/2/3... = the 1st/2nd/3rd data byte.
         variable TransferByteNum : integer := 0;
 
+        variable TenBitReadAddressPhase : boolean := false;
+
         -- Holds SCL low an extra StretchDelayCopy right after BitPos of the
         -- current byte (TransferByteNum), if that's what was armed for this
         -- transaction. A no-op (no wait) otherwise, so it's safe to
@@ -297,6 +301,8 @@ begin
             else
                 wait until falling_edge(SDA) and SCL = 'H';
             end if;
+
+            TenBitReadAddressPhase := false;
 
             TransferByteNum := 0;
             if ClockStretchRequestCount /= SeenStretchRequests then
@@ -420,6 +426,9 @@ begin
                             -- with no idle gap in between (see SrDetected above).
                             -- SDA rose => STOP, go idle as before.
                             SrDetected := (to_x01(SDA) = '0');
+                            if TEN_BIT_ADDR and SrDetected then
+                                TenBitReadAddressPhase := true;
+                            end if;
                             exit WriteLoop;
                         end if;
                         MaybeStretch(0);  -- after bit 7/MSB (confirmed not Sr/Stop)
@@ -464,16 +473,18 @@ begin
                 end if;
             end if;
 
-            if NackArmed then
-                NackArmed := false;
-                Alert(ModelID, "NACK injection (index " & to_string(NackByteIndexCopy) &
-                    ") was armed but never applied during the last transaction", ERROR);
-            end if;
+            if not TenBitReadAddressPhase then
+                if NackArmed then
+                    NackArmed := false;
+                    Alert(ModelID, "NACK injection (index " & to_string(NackByteIndexCopy) &
+                        ") was armed but never applied during the last transaction", ERROR);
+                end if;
 
-            if StretchArmed then
-                StretchArmed := false;
-                Alert(ModelID, "Clock stretch (index " & to_string(StretchIndexCopy) &
-                    ") was armed but never applied during the last transaction", ERROR);
+                if StretchArmed then
+                    StretchArmed := false;
+                    Alert(ModelID, "Clock stretch (index " & to_string(StretchIndexCopy) &
+                        ") was armed but never applied during the last transaction", ERROR);
+                end if;
             end if;
         end loop BusEngineLoop;
     end process BusEngine;
